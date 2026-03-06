@@ -1,6 +1,5 @@
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
-#[allow(dead_code)]
 pub enum Register {
     Config = 0x00,
     AdcConfig = 0x01,

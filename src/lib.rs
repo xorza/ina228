@@ -18,13 +18,28 @@ pub struct Ina228<I2C> {
     adc_range: AdcRange,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Measurements {
     pub bus_voltage_v: f32,
     pub shunt_voltage_v: f32,
     pub current_a: f32,
     pub power_w: f32,
     pub die_temp_c: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiagnosticFlags {
+    pub memory_status: bool,
+    pub conversion_ready: bool,
+    pub energy_overflow: bool,
+    pub math_overflow: bool,
+    pub temp_over_limit: bool,
+    pub shunt_over_limit: bool,
+    pub shunt_under_limit: bool,
+    pub bus_over_limit: bool,
+    pub bus_under_limit: bool,
+    pub power_over_limit: bool,
+    pub charge_overflow: bool,
 }
 
 impl<I2C: I2c> Ina228<I2C> {
@@ -99,6 +114,11 @@ impl<I2C: I2c> Ina228<I2C> {
         self.write_u16(Register::ShuntTempco, tempco_ppm & 0x3FFF);
     }
 
+    pub fn disable_temp_compensation(&mut self) {
+        let config = self.read_u16(Register::Config);
+        self.write_u16(Register::Config, config & !(1 << 5));
+    }
+
     pub fn bus_voltage(&mut self) -> f32 {
         let raw = self.read_u24(Register::Vbus) >> 4;
         raw as f32 * 195.3125e-6
@@ -114,21 +134,37 @@ impl<I2C: I2c> Ina228<I2C> {
     }
 
     pub fn current(&mut self) -> f32 {
+        debug_assert!(
+            self.current_lsb != 0.0,
+            "call calibrate() before reading current"
+        );
         let raw = self.read_i20(Register::Current);
         raw as f32 * self.current_lsb
     }
 
     pub fn power(&mut self) -> f32 {
+        debug_assert!(
+            self.current_lsb != 0.0,
+            "call calibrate() before reading power"
+        );
         let raw = self.read_u24(Register::Power);
         raw as f32 * 3.2 * self.current_lsb
     }
 
     pub fn energy(&mut self) -> f64 {
+        debug_assert!(
+            self.current_lsb != 0.0,
+            "call calibrate() before reading energy"
+        );
         let raw = self.read_u40(Register::Energy);
         raw as f64 * 16.0 * 3.2 * self.current_lsb as f64
     }
 
     pub fn charge(&mut self) -> f64 {
+        debug_assert!(
+            self.current_lsb != 0.0,
+            "call calibrate() before reading charge"
+        );
         let raw = self.read_i40(Register::Charge);
         raw as f64 * self.current_lsb as f64
     }
@@ -138,7 +174,7 @@ impl<I2C: I2c> Ina228<I2C> {
         raw as f32 * 7.8125e-3
     }
 
-    pub fn read_all(&mut self) -> Measurements {
+    pub fn read_instant(&mut self) -> Measurements {
         Measurements {
             bus_voltage_v: self.bus_voltage(),
             shunt_voltage_v: self.shunt_voltage(),
@@ -156,6 +192,102 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn conversion_ready(&mut self) -> bool {
         let diag = self.read_u16(Register::DiagAlrt);
         diag & (1 << 1) != 0
+    }
+
+    pub fn diagnostic_flags(&mut self) -> DiagnosticFlags {
+        let d = self.read_u16(Register::DiagAlrt);
+        DiagnosticFlags {
+            memory_status: d & (1 << 15) != 0,
+            conversion_ready: d & (1 << 1) != 0,
+            energy_overflow: d & (1 << 9) != 0,
+            math_overflow: d & (1 << 8) != 0,
+            temp_over_limit: d & (1 << 7) != 0,
+            shunt_over_limit: d & (1 << 6) != 0,
+            shunt_under_limit: d & (1 << 5) != 0,
+            bus_over_limit: d & (1 << 4) != 0,
+            bus_under_limit: d & (1 << 3) != 0,
+            power_over_limit: d & (1 << 2) != 0,
+            charge_overflow: d & (1 << 0) != 0,
+        }
+    }
+
+    /// Configure alert pin behavior via DIAG_ALRT upper bits.
+    /// `latch`: true to latch alerts until read, false for transparent mode.
+    /// `active_high`: true for active-high ALERT pin, false for active-low.
+    /// `conversion_ready_alert`: true to assert ALERT on conversion complete.
+    /// `slow_alert`: true to use averaged value for alert comparison.
+    pub fn configure_alerts(
+        &mut self,
+        latch: bool,
+        active_high: bool,
+        conversion_ready_alert: bool,
+        slow_alert: bool,
+    ) {
+        let diag = self.read_u16(Register::DiagAlrt);
+        let mask = 0x3FF; // keep lower 10 flag bits
+        let mut value = diag & mask;
+        if conversion_ready_alert {
+            value |= 1 << 14;
+        }
+        if slow_alert {
+            value |= 1 << 13;
+        }
+        if active_high {
+            value |= 1 << 12;
+        }
+        if latch {
+            value |= 1 << 11;
+        }
+        self.write_u16(Register::DiagAlrt, value);
+    }
+
+    /// Set shunt over-voltage limit in Volts.
+    pub fn set_shunt_overvoltage_limit(&mut self, voltage_v: f32) {
+        let lsb = match self.adc_range {
+            AdcRange::Range163mV => 5.0e-6,
+            AdcRange::Range40mV => 1.25e-6,
+        };
+        let raw = (voltage_v / lsb) as i16;
+        self.write_u16(Register::Sovl, raw as u16);
+    }
+
+    /// Set shunt under-voltage limit in Volts.
+    pub fn set_shunt_undervoltage_limit(&mut self, voltage_v: f32) {
+        let lsb = match self.adc_range {
+            AdcRange::Range163mV => 5.0e-6,
+            AdcRange::Range40mV => 1.25e-6,
+        };
+        let raw = (voltage_v / lsb) as i16;
+        self.write_u16(Register::Suvl, raw as u16);
+    }
+
+    /// Set bus over-voltage limit in Volts.
+    pub fn set_bus_overvoltage_limit(&mut self, voltage_v: f32) {
+        let raw = (voltage_v / 3.125e-3) as u16;
+        self.write_u16(Register::Bovl, raw);
+    }
+
+    /// Set bus under-voltage limit in Volts.
+    pub fn set_bus_undervoltage_limit(&mut self, voltage_v: f32) {
+        let raw = (voltage_v / 3.125e-3) as u16;
+        self.write_u16(Register::Buvl, raw);
+    }
+
+    /// Set temperature over-limit in degrees Celsius.
+    pub fn set_temperature_limit(&mut self, temp_c: f32) {
+        let raw = (temp_c / 7.8125e-3) as i16;
+        self.write_u16(Register::TempLimit, raw as u16);
+    }
+
+    /// Set power over-limit in Watts.
+    pub fn set_power_limit(&mut self, power_w: f32) {
+        debug_assert!(
+            self.current_lsb != 0.0,
+            "call calibrate() before setting power limit"
+        );
+        let power_lsb = 3.2 * self.current_lsb;
+        let raw = (power_w / (256.0 * power_lsb)) as u16;
+        self.write_u16(Register::PwrLimit, raw);
     }
 
     pub fn manufacturer_id(&mut self) -> u16 {
@@ -203,12 +335,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     fn read_i20(&mut self, reg: Register) -> i32 {
         let raw = self.read_u24(reg) >> 4;
-        // Sign-extend from bit 19
-        if raw & (1 << 19) != 0 {
-            raw as i32 | !0xF_FFFF
-        } else {
-            raw as i32
-        }
+        ((raw as i32) << 12) >> 12
     }
 
     fn read_u40(&mut self, reg: Register) -> u64 {
@@ -225,11 +352,6 @@ impl<I2C: I2c> Ina228<I2C> {
 
     fn read_i40(&mut self, reg: Register) -> i64 {
         let raw = self.read_u40(reg);
-        // Sign-extend from bit 39
-        if raw & (1 << 39) != 0 {
-            raw as i64 | !0xFF_FFFF_FFFF
-        } else {
-            raw as i64
-        }
+        ((raw as i64) << 24) >> 24
     }
 }

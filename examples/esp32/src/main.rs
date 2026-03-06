@@ -49,7 +49,7 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        let m = ina.read_all();
+        let m = ina.read_instant();
         log::info!(
             "Bus={:.3}V Shunt={:.6}V I={:.4}A P={:.4}W T={:.1}°C",
             m.bus_voltage_v,
