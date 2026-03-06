@@ -3,6 +3,10 @@ name = "ina228"
 version = "0.1.0"
 edition = "2024"
 description = "Platform-agnostic Rust driver for the TI INA228 power/energy/charge monitor"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/xorza/ina228"
+keywords = ["ina228", "embedded-hal", "power-monitor", "i2c", "ti"]
+categories = ["embedded", "hardware-support", "no-std"]
 
 [dependencies]
 embedded-hal = "1.0"
