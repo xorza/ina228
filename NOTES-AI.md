@@ -6,6 +6,8 @@
 src/
 ├── lib.rs          # Driver struct, public API, I2C helpers
 ├── registers.rs    # Register addresses, config enums (AdcRange, ConversionTime, etc.)
+tests/
+└── driver_tests.rs # 32 integration tests using embedded-hal-mock
 examples/
 └── esp32_read.rs   # ESP32 usage example (commented code, needs esp-idf toolchain)
 ```
@@ -30,7 +32,13 @@ examples/
 - `SHUNT_CAL = 13107.2e6 × CURRENT_LSB × R_SHUNT` (×4 for 40mV range)
 - Must call `calibrate()` before reading current/power/energy/charge
 
+## Testing
+
+- 32 integration tests in `tests/driver_tests.rs` using `embedded-hal-mock` (eh1 feature)
+- Uses I2C mock with expected transactions to verify all register reads/writes
+- Covers: construction (valid/invalid addresses), reset, configure, set_adc_range, calibrate (including assertions), all measurement reads (bus voltage, shunt voltage, current, power, energy, charge, temperature), sign extension for negative values (20-bit and 40-bit), temp compensation, reset accumulators, conversion ready, manufacturer/device IDs, read_all
+
 ## Dependencies
 
 - `embedded-hal = "1.0"` (runtime)
-- `embedded-hal-mock = "0.11"` (dev/test)
+- `embedded-hal-mock = { version = "0.11", features = ["eh1"] }` (dev/test)
