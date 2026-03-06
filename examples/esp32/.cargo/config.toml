@@ -11,4 +11,4 @@ build-std = ["std", "panic_abort"]
 
 [env]
 MCU = "esp32"
-ESP_IDF_VERSION = "v5.3.3"
+ESP_IDF_VERSION = "v5.4.3"
