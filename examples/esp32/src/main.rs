@@ -39,8 +39,8 @@ fn main() {
         AveragingCount::N64,
     );
 
-    // Calibrate for 10A max current, 10mΩ shunt resistor
-    ina.calibrate(10.0, 0.01);
+    // Calibrate for 10A max current, 2mΩ shunt resistor (R002)
+    ina.calibrate(10.0, 0.002);
 
     log::info!("INA228 initialized, reading measurements...");
 
