@@ -433,9 +433,10 @@ fn manufacturer_id() {
 
 #[test]
 fn device_id() {
-    let i2c = Mock::new(&[read_u16_txn(0x3F, 0x2280)]);
+    // Register returns 0x2281 (device=0x228, revision=1)
+    let i2c = Mock::new(&[read_u16_txn(0x3F, 0x2281)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert_eq!(ina.device_id(), 0x2280);
+    assert_eq!(ina.device_id(), 0x228);
     ina.release().done();
 }
 

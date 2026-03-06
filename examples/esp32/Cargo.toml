@@ -1,0 +1,25 @@
+[package]
+name = "esp32-ina228-example"
+version = "0.1.0"
+edition = "2021"
+resolver = "2"
+
+[[bin]]
+name = "esp32-ina228-example"
+harness = false
+
+[profile.release]
+opt-level = "s"
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[dependencies]
+ina228 = { path = "../.." }
+log = "0.4"
+esp-idf-svc = "0.51"
+esp-idf-hal = "0.45"
+
+[build-dependencies]
+embuild = "0.33"

@@ -7,7 +7,8 @@ pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
 pub const DEFAULT_ADDRESS: u8 = 0x40;
 pub const MANUFACTURER_ID: u16 = 0x5449;
-pub const DEVICE_ID: u16 = 0x2280;
+/// Device ID (upper 12 bits of register 0x3F; lower 4 bits are die revision).
+pub const DEVICE_ID: u16 = 0x228;
 
 #[derive(Debug)]
 pub struct Ina228<I2C> {
@@ -161,8 +162,14 @@ impl<I2C: I2c> Ina228<I2C> {
         self.read_u16(Register::ManufacturerId)
     }
 
+    /// Returns the device ID (upper 12 bits, without die revision).
     pub fn device_id(&mut self) -> u16 {
-        self.read_u16(Register::DeviceId)
+        self.read_u16(Register::DeviceId) >> 4
+    }
+
+    /// Returns the die revision (lower 4 bits of device ID register).
+    pub fn die_revision(&mut self) -> u8 {
+        (self.read_u16(Register::DeviceId) & 0xF) as u8
     }
 
     pub fn release(self) -> I2C {
