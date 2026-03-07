@@ -627,3 +627,32 @@ fn i2c_error_propagates() {
     assert!(result.is_err());
     ina.release().done();
 }
+
+#[test]
+fn calibrate_rollback_on_i2c_error() {
+    let shunt_cal_ok = expected_shunt_cal(10.0, 0.01, false);
+    let shunt_cal_fail = expected_shunt_cal(1.0, 0.1, false);
+    let fail_bytes = shunt_cal_fail.to_be_bytes();
+    let i2c = Mock::new(&[
+        // First calibrate succeeds
+        write_txn(0x02, shunt_cal_ok),
+        // Second calibrate fails on I2C write
+        Transaction::write(ADDR, vec![0x02, fail_bytes[0], fail_bytes[1]])
+            .with_error(ErrorKind::Bus),
+        // After failed calibrate, current() should still use the original calibration
+        read_txn(0x07, &u24_bytes(262144 << 4)),
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    ina.calibrate(10.0, 0.01).unwrap();
+
+    // This calibrate should fail and rollback
+    assert!(ina.calibrate(1.0, 0.1).is_err());
+
+    // current_lsb should still be from the first calibrate (10A/524288)
+    let current = ina.current().unwrap();
+    assert!(
+        (current - 5.0).abs() < 0.001,
+        "expected ~5.0A (original calibration), got {current}"
+    );
+    ina.release().done();
+}

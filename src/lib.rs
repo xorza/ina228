@@ -92,11 +92,12 @@ impl<I2C: I2c> Ina228<I2C> {
             AdcRange::Range40mV => config | (1 << 4),
         };
         self.write_u16(Register::Config, value)?;
+
         self.adc_range = range;
 
         // Re-write SHUNT_CAL if already calibrated, since the range multiplier changed.
         if self.current_lsb != 0.0 {
-            self.write_shunt_cal()?;
+            self.write_shunt_cal(self.current_lsb, self.shunt_resistance_ohm)?;
         }
         Ok(())
     }
@@ -115,13 +116,19 @@ impl<I2C: I2c> Ina228<I2C> {
             "shunt_resistance must be positive"
         );
 
-        self.current_lsb = max_current_a / 524_288.0; // 2^19
+        let current_lsb = max_current_a / 524_288.0; // 2^19
+        self.write_shunt_cal(current_lsb, shunt_resistance_ohm)?;
+        self.current_lsb = current_lsb;
         self.shunt_resistance_ohm = shunt_resistance_ohm;
-        self.write_shunt_cal()
+        Ok(())
     }
 
-    fn write_shunt_cal(&mut self) -> Result<(), I2C::Error> {
-        let mut shunt_cal = 13107.2e6 * self.current_lsb as f64 * self.shunt_resistance_ohm as f64;
+    fn write_shunt_cal(
+        &mut self,
+        current_lsb: f32,
+        shunt_resistance_ohm: f32,
+    ) -> Result<(), I2C::Error> {
+        let mut shunt_cal = 13107.2e6 * current_lsb as f64 * shunt_resistance_ohm as f64;
         if self.adc_range == AdcRange::Range40mV {
             shunt_cal *= 4.0;
         }
