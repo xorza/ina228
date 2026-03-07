@@ -20,8 +20,8 @@ examples/
 
 ## Architecture
 
-- Platform-agnostic driver using `embedded_hal::i2c::I2c` trait
-- Single `Ina228<I2C>` generic struct holding I2C bus, address, calibration state
+- `#![no_std]` platform-agnostic driver using `embedded_hal::i2c::I2c` trait
+- Single `Ina228<I2C>` generic struct holding I2C bus, address, calibration state (current_lsb, shunt_resistance_ohm, adc_range)
 - Mixed register sizes: `read_u16`, `read_u24`, `read_u40` internal helpers
 - 20-bit signed values use arithmetic shift sign extension (`read_i20`)
 - 40-bit signed values use arithmetic shift sign extension (`read_i40`)
@@ -47,7 +47,7 @@ examples/
 ### Configuration
 - `reset()` — soft reset all registers
 - `configure(mode, vbus_ct, vshunt_ct, temp_ct, avg)` — ADC config
-- `set_adc_range(range)` — ±163.84mV or ±40.96mV shunt range
+- `set_adc_range(range)` — ±163.84mV or ±40.96mV shunt range; auto-recalibrates SHUNT_CAL if already calibrated
 - `calibrate(max_current_a, shunt_resistance_ohm)` — required before current/power/energy/charge
 - `set_temp_compensation(tempco_ppm)` — enable shunt temp compensation
 - `disable_temp_compensation()` — disable shunt temp compensation
@@ -74,11 +74,13 @@ examples/
 
 - `CURRENT_LSB = max_current / 2^19`
 - `SHUNT_CAL = 13107.2e6 × CURRENT_LSB × R_SHUNT` (×4 for 40mV range)
+- `assert!` panics if SHUNT_CAL exceeds 15-bit max (32767) — reduce max_current or shunt_resistance
 - `debug_assert!` fires if current/power/energy/charge read before calibrate()
+- `set_adc_range()` auto-recalibrates via stored shunt_resistance_ohm
 
 ## Testing
 
-- 42 integration tests in `tests/driver_tests.rs` using `embedded-hal-mock` (eh1 feature)
+- 46 integration tests in `tests/driver_tests.rs` using `embedded-hal-mock` (eh1 feature)
 - Uses I2C mock with expected transactions to verify all register reads/writes
 - Covers: construction, reset, configure, calibrate, all measurements, sign extension,
   temp compensation, alerts, diagnostic flags, thresholds, IDs, read_instant

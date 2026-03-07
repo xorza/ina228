@@ -1,3 +1,5 @@
+#![no_std]
+
 mod registers;
 
 use embedded_hal::i2c::I2c;
@@ -15,6 +17,7 @@ pub struct Ina228<I2C> {
     i2c: I2C,
     address: u8,
     current_lsb: f32,
+    shunt_resistance_ohm: f32,
     adc_range: AdcRange,
 }
 
@@ -52,6 +55,7 @@ impl<I2C: I2c> Ina228<I2C> {
             i2c,
             address,
             current_lsb: 0.0,
+            shunt_resistance_ohm: 0.0,
             adc_range: AdcRange::Range163mV,
         }
     }
@@ -85,6 +89,11 @@ impl<I2C: I2c> Ina228<I2C> {
         };
         self.write_u16(Register::Config, value);
         self.adc_range = range;
+
+        // Re-write SHUNT_CAL if already calibrated, since the range multiplier changed.
+        if self.current_lsb != 0.0 {
+            self.write_shunt_cal();
+        }
     }
 
     /// Calibrate for current/power measurement.
@@ -98,12 +107,20 @@ impl<I2C: I2c> Ina228<I2C> {
         );
 
         self.current_lsb = max_current_a / 524_288.0; // 2^19
+        self.shunt_resistance_ohm = shunt_resistance_ohm;
+        self.write_shunt_cal();
+    }
 
-        let mut shunt_cal = 13107.2e6 * self.current_lsb as f64 * shunt_resistance_ohm as f64;
+    fn write_shunt_cal(&mut self) {
+        let mut shunt_cal = 13107.2e6 * self.current_lsb as f64 * self.shunt_resistance_ohm as f64;
         if self.adc_range == AdcRange::Range40mV {
             shunt_cal *= 4.0;
         }
 
+        assert!(
+            shunt_cal <= 32767.0,
+            "SHUNT_CAL overflow: reduce max_current or shunt_resistance"
+        );
         let shunt_cal = shunt_cal as u16 & 0x7FFF; // 15-bit
         self.write_u16(Register::ShuntCal, shunt_cal);
     }

@@ -584,3 +584,62 @@ fn set_power_limit() {
     ina.set_power_limit(100.0);
     ina.release().done();
 }
+
+#[test]
+fn die_revision() {
+    // Register returns 0x2285 (device=0x228, revision=5)
+    let i2c = Mock::new(&[read_u16_txn(0x3F, 0x2285)]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    assert_eq!(ina.die_revision(), 5);
+    ina.release().done();
+}
+
+#[test]
+fn shunt_voltage_40mv_range() {
+    // 0.001V / 78.125e-9 = 12800 (raw 20-bit)
+    let raw_24 = 12800_u32 << 4;
+    let b0 = (raw_24 >> 16) as u8;
+    let b1 = (raw_24 >> 8) as u8;
+    let b2 = raw_24 as u8;
+
+    let i2c = Mock::new(&[
+        // set_adc_range reads then writes CONFIG
+        read_u16_txn(0x00, 0x0000),
+        write_txn(0x00, 1 << 4),
+        // shunt voltage read
+        read_u24_txn(0x04, b0, b1, b2),
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    ina.set_adc_range(AdcRange::Range40mV);
+    let v = ina.shunt_voltage();
+    assert!((v - 0.001).abs() < 1e-6, "expected ~0.001V, got {v}");
+    ina.release().done();
+}
+
+#[test]
+#[should_panic(expected = "SHUNT_CAL overflow")]
+fn calibrate_shunt_cal_overflow_panics() {
+    let i2c = Mock::new(&[]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    // 100A max with 0.1 ohm shunt → SHUNT_CAL ≈ 250000, way over 32767
+    ina.calibrate(100.0, 0.1);
+}
+
+#[test]
+fn set_adc_range_after_calibrate_recalibrates() {
+    let shunt_cal_163mv = expected_shunt_cal(5.0, 0.01, false);
+    let shunt_cal_40mv = expected_shunt_cal(5.0, 0.01, true);
+
+    let i2c = Mock::new(&[
+        // calibrate writes SHUNT_CAL (163mV range)
+        write_txn(0x02, shunt_cal_163mv),
+        // set_adc_range reads CONFIG, writes CONFIG, then recalibrates
+        read_u16_txn(0x00, 0x0000),
+        write_txn(0x00, 1 << 4),
+        write_txn(0x02, shunt_cal_40mv),
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    ina.calibrate(5.0, 0.01);
+    ina.set_adc_range(AdcRange::Range40mV);
+    ina.release().done();
+}
