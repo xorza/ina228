@@ -61,9 +61,20 @@ fn new_invalid_address_high() {
 
 #[test]
 fn reset() {
-    let i2c = Mock::new(&[write_txn(0x00, 1 << 15)]);
+    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
+    let i2c = Mock::new(&[
+        // calibrate writes SHUNT_CAL
+        write_txn(0x02, shunt_cal),
+        // reset writes CONFIG
+        write_txn(0x00, 1 << 15),
+        // bus_voltage still works (no calibration needed)
+        read_u24_txn(0x05, 0x00, 0x00, 0x00),
+    ]);
     let mut ina = Ina228::new(i2c, ADDR);
+    ina.calibrate(10.0, 0.01);
     ina.reset();
+    // bus_voltage should still work after reset (doesn't need calibration)
+    assert_eq!(ina.bus_voltage(), 0.0);
     ina.release().done();
 }
 

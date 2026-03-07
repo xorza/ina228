@@ -63,6 +63,9 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn reset(&mut self) {
         // Bit 15 = RST
         self.write_u16(Register::Config, 1 << 15);
+        self.current_lsb = 0.0;
+        self.shunt_resistance_ohm = 0.0;
+        self.adc_range = AdcRange::Range163mV;
     }
 
     pub fn configure(
