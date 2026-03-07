@@ -269,21 +269,13 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Set shunt over-voltage limit in Volts.
     pub fn set_shunt_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), I2C::Error> {
-        let lsb = match self.adc_range {
-            AdcRange::Range163mV => 5.0e-6,
-            AdcRange::Range40mV => 1.25e-6,
-        };
-        let raw = (voltage_v / lsb) as i16;
+        let raw = (voltage_v / self.shunt_limit_lsb()) as i16;
         self.write_u16(Register::Sovl, raw as u16)
     }
 
     /// Set shunt under-voltage limit in Volts.
     pub fn set_shunt_undervoltage_limit(&mut self, voltage_v: f32) -> Result<(), I2C::Error> {
-        let lsb = match self.adc_range {
-            AdcRange::Range163mV => 5.0e-6,
-            AdcRange::Range40mV => 1.25e-6,
-        };
-        let raw = (voltage_v / lsb) as i16;
+        let raw = (voltage_v / self.shunt_limit_lsb()) as i16;
         self.write_u16(Register::Suvl, raw as u16)
     }
 
@@ -332,6 +324,13 @@ impl<I2C: I2c> Ina228<I2C> {
 
     pub fn release(self) -> I2C {
         self.i2c
+    }
+
+    fn shunt_limit_lsb(&self) -> f32 {
+        match self.adc_range {
+            AdcRange::Range163mV => 5.0e-6,
+            AdcRange::Range40mV => 1.25e-6,
+        }
     }
 
     // --- I2C helpers ---
