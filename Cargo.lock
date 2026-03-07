@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "ina228"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "embedded-hal 1.0.0",
  "embedded-hal-mock",

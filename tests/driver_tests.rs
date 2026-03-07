@@ -1,3 +1,4 @@
+use embedded_hal::i2c::ErrorKind;
 use embedded_hal_mock::eh1::i2c::{Mock, Transaction};
 use ina228::{AdcRange, AveragingCount, ConversionTime, DEFAULT_ADDRESS, Ina228, OperatingMode};
 
@@ -71,10 +72,10 @@ fn reset() {
         read_u24_txn(0x05, 0x00, 0x00, 0x00),
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    ina.reset();
+    ina.calibrate(10.0, 0.01).unwrap();
+    ina.reset().unwrap();
     // bus_voltage should still work after reset (doesn't need calibration)
-    assert_eq!(ina.bus_voltage(), 0.0);
+    assert_eq!(ina.bus_voltage().unwrap(), 0.0);
     ina.release().done();
 }
 
@@ -90,7 +91,8 @@ fn configure_continuous_all() {
         ConversionTime::Us1052,
         ConversionTime::Us1052,
         AveragingCount::N64,
-    );
+    )
+    .unwrap();
     ina.release().done();
 }
 
@@ -106,7 +108,8 @@ fn configure_triggered_shunt_fast() {
         ConversionTime::Us50,
         ConversionTime::Us50,
         AveragingCount::N1,
-    );
+    )
+    .unwrap();
     ina.release().done();
 }
 
@@ -117,7 +120,7 @@ fn set_adc_range_40mv() {
         write_txn(0x00, 1 << 4),    // write CONFIG with ADCRANGE=1
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_adc_range(AdcRange::Range40mV);
+    ina.set_adc_range(AdcRange::Range40mV).unwrap();
     ina.release().done();
 }
 
@@ -128,7 +131,7 @@ fn set_adc_range_163mv_clears_bit() {
         write_txn(0x00, 0x0000),    // clears bit 4
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_adc_range(AdcRange::Range163mV);
+    ina.set_adc_range(AdcRange::Range163mV).unwrap();
     ina.release().done();
 }
 
@@ -137,7 +140,7 @@ fn calibrate_10a_10mohm() {
     let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
+    ina.calibrate(10.0, 0.01).unwrap();
     ina.release().done();
 }
 
@@ -153,8 +156,8 @@ fn calibrate_with_40mv_range() {
         write_txn(0x02, shunt_cal),
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_adc_range(AdcRange::Range40mV);
-    ina.calibrate(5.0, 0.01);
+    ina.set_adc_range(AdcRange::Range40mV).unwrap();
+    ina.calibrate(5.0, 0.01).unwrap();
     ina.release().done();
 }
 
@@ -163,7 +166,7 @@ fn calibrate_with_40mv_range() {
 fn calibrate_zero_current_panics() {
     let i2c = Mock::new(&[]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(0.0, 0.01);
+    ina.calibrate(0.0, 0.01).unwrap();
 }
 
 #[test]
@@ -171,7 +174,7 @@ fn calibrate_zero_current_panics() {
 fn calibrate_zero_shunt_panics() {
     let i2c = Mock::new(&[]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.0);
+    ina.calibrate(10.0, 0.0).unwrap();
 }
 
 #[test]
@@ -185,7 +188,7 @@ fn bus_voltage_known_value() {
 
     let i2c = Mock::new(&[read_u24_txn(0x05, b0, b1, b2)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let v = ina.bus_voltage();
+    let v = ina.bus_voltage().unwrap();
     assert!((v - 12.0).abs() < 0.001, "expected ~12.0V, got {v}");
     ina.release().done();
 }
@@ -194,7 +197,7 @@ fn bus_voltage_known_value() {
 fn bus_voltage_zero() {
     let i2c = Mock::new(&[read_u24_txn(0x05, 0, 0, 0)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert_eq!(ina.bus_voltage(), 0.0);
+    assert_eq!(ina.bus_voltage().unwrap(), 0.0);
     ina.release().done();
 }
 
@@ -209,7 +212,7 @@ fn shunt_voltage_positive() {
 
     let i2c = Mock::new(&[read_u24_txn(0x04, b0, b1, b2)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let v = ina.shunt_voltage();
+    let v = ina.shunt_voltage().unwrap();
     assert!((v - 0.001).abs() < 1e-6, "expected ~0.001V, got {v}");
     ina.release().done();
 }
@@ -226,7 +229,7 @@ fn shunt_voltage_negative() {
 
     let i2c = Mock::new(&[read_u24_txn(0x04, b0, b1, b2)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let v = ina.shunt_voltage();
+    let v = ina.shunt_voltage().unwrap();
     assert!((v - (-0.001)).abs() < 1e-6, "expected ~-0.001V, got {v}");
     ina.release().done();
 }
@@ -245,8 +248,8 @@ fn current_positive() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), read_u24_txn(0x07, b0, b1, b2)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let current = ina.current();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let current = ina.current().unwrap();
     assert!(
         (current - 5.0).abs() < 0.001,
         "expected ~5.0A, got {current}"
@@ -267,8 +270,8 @@ fn current_negative() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), read_u24_txn(0x07, b0, b1, b2)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let current = ina.current();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let current = ina.current().unwrap();
     assert!(
         (current - (-5.0)).abs() < 0.001,
         "expected ~-5.0A, got {current}"
@@ -290,8 +293,8 @@ fn power_read() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), read_u24_txn(0x08, b0, b1, b2)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let p = ina.power();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let p = ina.power().unwrap();
     assert!((p - power_w).abs() < 0.1, "expected ~{power_w}W, got {p}");
     ina.release().done();
 }
@@ -314,8 +317,8 @@ fn energy_read() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), read_u40_txn(0x09, bytes)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let e = ina.energy();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let e = ina.energy().unwrap();
     assert!((e - energy_j).abs() < 1.0, "expected ~{energy_j}J, got {e}");
     ina.release().done();
 }
@@ -337,8 +340,8 @@ fn charge_positive() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), read_u40_txn(0x0A, bytes)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let c = ina.charge();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let c = ina.charge().unwrap();
     assert!(
         (c - charge_c).abs() < 0.01,
         "expected ~{charge_c}C, got {c}"
@@ -364,8 +367,8 @@ fn charge_negative() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), read_u40_txn(0x0A, bytes)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let c = ina.charge();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let c = ina.charge().unwrap();
     assert!(
         (c - charge_c).abs() < 0.01,
         "expected ~{charge_c}C, got {c}"
@@ -379,19 +382,19 @@ fn die_temperature_positive() {
     let raw = 3200_u16;
     let i2c = Mock::new(&[read_u16_txn(0x06, raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let t = ina.die_temperature();
-    assert!((t - 25.0).abs() < 0.01, "expected ~25.0°C, got {t}");
+    let t = ina.die_temperature().unwrap();
+    assert!((t - 25.0).abs() < 0.01, "expected ~25.0C, got {t}");
     ina.release().done();
 }
 
 #[test]
 fn die_temperature_negative() {
-    // -10°C / 7.8125e-3 = -1280 → as u16 = 64256 (0xFB00)
+    // -10°C / 7.8125e-3 = -1280 -> as u16 = 64256 (0xFB00)
     let raw = (-1280_i16) as u16;
     let i2c = Mock::new(&[read_u16_txn(0x06, raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let t = ina.die_temperature();
-    assert!((t - (-10.0)).abs() < 0.01, "expected ~-10.0°C, got {t}");
+    let t = ina.die_temperature().unwrap();
+    assert!((t - (-10.0)).abs() < 0.01, "expected ~-10.0C, got {t}");
     ina.release().done();
 }
 
@@ -403,7 +406,7 @@ fn set_temp_compensation() {
         write_txn(0x03, 15 & 0x3FFF), // write SHUNT_TEMPCO
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_temp_compensation(15);
+    ina.set_temp_compensation(15).unwrap();
     ina.release().done();
 }
 
@@ -414,7 +417,7 @@ fn reset_accumulators() {
         write_txn(0x00, 1 << 14),   // set RSTACC bit
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.reset_accumulators();
+    ina.reset_accumulators().unwrap();
     ina.release().done();
 }
 
@@ -422,7 +425,7 @@ fn reset_accumulators() {
 fn conversion_ready_true() {
     let i2c = Mock::new(&[read_u16_txn(0x0B, 1 << 1)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert!(ina.conversion_ready());
+    assert!(ina.conversion_ready().unwrap());
     ina.release().done();
 }
 
@@ -430,7 +433,7 @@ fn conversion_ready_true() {
 fn conversion_ready_false() {
     let i2c = Mock::new(&[read_u16_txn(0x0B, 0x0000)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert!(!ina.conversion_ready());
+    assert!(!ina.conversion_ready().unwrap());
     ina.release().done();
 }
 
@@ -438,7 +441,7 @@ fn conversion_ready_false() {
 fn manufacturer_id() {
     let i2c = Mock::new(&[read_u16_txn(0x3E, 0x5449)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert_eq!(ina.manufacturer_id(), 0x5449);
+    assert_eq!(ina.manufacturer_id().unwrap(), 0x5449);
     ina.release().done();
 }
 
@@ -447,7 +450,7 @@ fn device_id() {
     // Register returns 0x2281 (device=0x228, revision=1)
     let i2c = Mock::new(&[read_u16_txn(0x3F, 0x2281)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert_eq!(ina.device_id(), 0x228);
+    assert_eq!(ina.device_id().unwrap(), 0x228);
     ina.release().done();
 }
 
@@ -458,7 +461,7 @@ fn read_instant_returns_measurements() {
     let i2c = Mock::new(&[
         // calibrate
         write_txn(0x02, shunt_cal),
-        // bus_voltage: 12V → raw_20=61440, raw_24=61440<<4
+        // bus_voltage: 12V -> raw_20=61440, raw_24=61440<<4
         read_u24_txn(0x05, 0x0F, 0x00, 0x00),
         // shunt_voltage: 0V
         read_u24_txn(0x04, 0x00, 0x00, 0x00),
@@ -466,12 +469,12 @@ fn read_instant_returns_measurements() {
         read_u24_txn(0x07, 0x00, 0x00, 0x00),
         // power: 0W
         read_u24_txn(0x08, 0x00, 0x00, 0x00),
-        // die_temp: 25°C → 3200
+        // die_temp: 25C -> 3200
         read_u16_txn(0x06, 3200),
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    let m = ina.read_instant();
+    ina.calibrate(10.0, 0.01).unwrap();
+    let m = ina.read_instant().unwrap();
     assert!((m.bus_voltage_v - 12.0).abs() < 0.001);
     assert_eq!(m.shunt_voltage_v, 0.0);
     assert_eq!(m.current_a, 0.0);
@@ -487,7 +490,7 @@ fn disable_temp_compensation() {
         write_txn(0x00, 0x0000),    // clears TEMPCOMP bit
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.disable_temp_compensation();
+    ina.disable_temp_compensation().unwrap();
     ina.release().done();
 }
 
@@ -495,7 +498,7 @@ fn disable_temp_compensation() {
 fn diagnostic_flags_all_clear() {
     let i2c = Mock::new(&[read_u16_txn(0x0B, 0x0000)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let flags = ina.diagnostic_flags();
+    let flags = ina.diagnostic_flags().unwrap();
     assert!(!flags.conversion_ready);
     assert!(!flags.temp_over_limit);
     assert!(!flags.shunt_over_limit);
@@ -510,7 +513,7 @@ fn diagnostic_flags_alerts_set() {
     let diag = (1 << 7) | (1 << 4) | (1 << 1);
     let i2c = Mock::new(&[read_u16_txn(0x0B, diag)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    let flags = ina.diagnostic_flags();
+    let flags = ina.diagnostic_flags().unwrap();
     assert!(flags.temp_over_limit);
     assert!(flags.bus_over_limit);
     assert!(flags.conversion_ready);
@@ -527,27 +530,27 @@ fn configure_alerts_latch_active_high() {
         write_txn(0x0B, (1 << 14) | (1 << 12) | (1 << 11)),
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.configure_alerts(true, true, true, false);
+    ina.configure_alerts(true, true, true, false).unwrap();
     ina.release().done();
 }
 
 #[test]
 fn set_shunt_overvoltage_limit() {
-    // 0.05V / 5µV = 10000
+    // 0.05V / 5uV = 10000
     let expected_raw = (0.05_f32 / 5.0e-6) as i16 as u16;
     let i2c = Mock::new(&[write_txn(0x0C, expected_raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_shunt_overvoltage_limit(0.05);
+    ina.set_shunt_overvoltage_limit(0.05).unwrap();
     ina.release().done();
 }
 
 #[test]
 fn set_shunt_undervoltage_limit() {
-    // -0.05V / 5µV = -10000
+    // -0.05V / 5uV = -10000
     let expected_raw = (-0.05_f32 / 5.0e-6) as i16 as u16;
     let i2c = Mock::new(&[write_txn(0x0D, expected_raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_shunt_undervoltage_limit(-0.05);
+    ina.set_shunt_undervoltage_limit(-0.05).unwrap();
     ina.release().done();
 }
 
@@ -557,7 +560,7 @@ fn set_bus_overvoltage_limit() {
     let expected_raw = (48.0_f32 / 3.125e-3) as u16;
     let i2c = Mock::new(&[write_txn(0x0E, expected_raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_bus_overvoltage_limit(48.0);
+    ina.set_bus_overvoltage_limit(48.0).unwrap();
     ina.release().done();
 }
 
@@ -567,17 +570,17 @@ fn set_bus_undervoltage_limit() {
     let expected_raw = (3.0_f32 / 3.125e-3) as u16;
     let i2c = Mock::new(&[write_txn(0x0F, expected_raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_bus_undervoltage_limit(3.0);
+    ina.set_bus_undervoltage_limit(3.0).unwrap();
     ina.release().done();
 }
 
 #[test]
 fn set_temperature_limit() {
-    // 80°C / 7.8125e-3 = 10240
+    // 80C / 7.8125e-3 = 10240
     let expected_raw = (80.0_f32 / 7.8125e-3) as i16 as u16;
     let i2c = Mock::new(&[write_txn(0x10, expected_raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_temperature_limit(80.0);
+    ina.set_temperature_limit(80.0).unwrap();
     ina.release().done();
 }
 
@@ -591,8 +594,8 @@ fn set_power_limit() {
 
     let i2c = Mock::new(&[write_txn(0x02, shunt_cal), write_txn(0x11, expected_raw)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01);
-    ina.set_power_limit(100.0);
+    ina.calibrate(10.0, 0.01).unwrap();
+    ina.set_power_limit(100.0).unwrap();
     ina.release().done();
 }
 
@@ -601,7 +604,7 @@ fn die_revision() {
     // Register returns 0x2285 (device=0x228, revision=5)
     let i2c = Mock::new(&[read_u16_txn(0x3F, 0x2285)]);
     let mut ina = Ina228::new(i2c, ADDR);
-    assert_eq!(ina.die_revision(), 5);
+    assert_eq!(ina.die_revision().unwrap(), 5);
     ina.release().done();
 }
 
@@ -621,8 +624,8 @@ fn shunt_voltage_40mv_range() {
         read_u24_txn(0x04, b0, b1, b2),
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.set_adc_range(AdcRange::Range40mV);
-    let v = ina.shunt_voltage();
+    ina.set_adc_range(AdcRange::Range40mV).unwrap();
+    let v = ina.shunt_voltage().unwrap();
     assert!((v - 0.001).abs() < 1e-6, "expected ~0.001V, got {v}");
     ina.release().done();
 }
@@ -632,8 +635,8 @@ fn shunt_voltage_40mv_range() {
 fn calibrate_shunt_cal_overflow_panics() {
     let i2c = Mock::new(&[]);
     let mut ina = Ina228::new(i2c, ADDR);
-    // 100A max with 0.1 ohm shunt → SHUNT_CAL ≈ 250000, way over 32767
-    ina.calibrate(100.0, 0.1);
+    // 100A max with 0.1 ohm shunt -> SHUNT_CAL ~ 250000, way over 32767
+    ina.calibrate(100.0, 0.1).unwrap();
 }
 
 #[test]
@@ -650,7 +653,18 @@ fn set_adc_range_after_calibrate_recalibrates() {
         write_txn(0x02, shunt_cal_40mv),
     ]);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(5.0, 0.01);
-    ina.set_adc_range(AdcRange::Range40mV);
+    ina.calibrate(5.0, 0.01).unwrap();
+    ina.set_adc_range(AdcRange::Range40mV).unwrap();
+    ina.release().done();
+}
+
+#[test]
+fn i2c_error_propagates() {
+    let i2c = Mock::new(&[
+        Transaction::write_read(ADDR, vec![0x05], vec![0, 0, 0]).with_error(ErrorKind::Bus)
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    let result = ina.bus_voltage();
+    assert!(result.is_err());
     ina.release().done();
 }
