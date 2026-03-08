@@ -1,6 +1,6 @@
 [package]
 name = "ina228"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Platform-agnostic Rust driver for the TI INA228 power/energy/charge monitor"
 license = "MIT OR Apache-2.0"

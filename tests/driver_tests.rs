@@ -419,35 +419,6 @@ fn device_id() {
 }
 
 #[test]
-fn read_instant_returns_measurements() {
-    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
-
-    let i2c = Mock::new(&[
-        // calibrate
-        write_txn(0x02, shunt_cal),
-        // bus_voltage: 12V -> raw_20=61440, raw_24=61440<<4
-        read_txn(0x05, &[0x0F, 0x00, 0x00]),
-        // shunt_voltage: 0V
-        read_txn(0x04, &[0x00, 0x00, 0x00]),
-        // current: 0A
-        read_txn(0x07, &[0x00, 0x00, 0x00]),
-        // power: 0W
-        read_txn(0x08, &[0x00, 0x00, 0x00]),
-        // die_temp: 25C -> 3200
-        read_txn(0x06, &3200_u16.to_be_bytes()),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR);
-    ina.calibrate(10.0, 0.01).unwrap();
-    let m = ina.read_instant().unwrap();
-    assert!((m.bus_voltage_v - 12.0).abs() < 0.001);
-    assert_eq!(m.shunt_voltage_v, 0.0);
-    assert_eq!(m.current_a, 0.0);
-    assert_eq!(m.power_w, 0.0);
-    assert!((m.die_temp_c - 25.0).abs() < 0.01);
-    ina.release().done();
-}
-
-#[test]
 fn disable_temp_compensation() {
     let i2c = Mock::new(&[
         read_txn(0x00, &0x0020_u16.to_be_bytes()), // CONFIG with TEMPCOMP set

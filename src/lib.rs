@@ -21,15 +21,6 @@ pub struct Ina228<I2C> {
     adc_range: AdcRange,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Measurements {
-    pub bus_voltage_v: f32,
-    pub shunt_voltage_v: f32,
-    pub current_a: f32,
-    pub power_w: f32,
-    pub die_temp_c: f32,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DiagnosticFlags {
     pub memory_status: bool,
@@ -205,16 +196,6 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn die_temperature(&mut self) -> Result<f32, I2C::Error> {
         let raw = self.read_u16(Register::DieTemp)? as i16;
         Ok(raw as f32 * 7.8125e-3)
-    }
-
-    pub fn read_instant(&mut self) -> Result<Measurements, I2C::Error> {
-        Ok(Measurements {
-            bus_voltage_v: self.bus_voltage()?,
-            shunt_voltage_v: self.shunt_voltage()?,
-            current_a: self.current()?,
-            power_w: self.power()?,
-            die_temp_c: self.die_temperature()?,
-        })
     }
 
     pub fn reset_accumulators(&mut self) -> Result<(), I2C::Error> {
