@@ -7,11 +7,17 @@ use registers::Register;
 
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
+/// Default I2C address (A0=GND, A1=GND).
 pub const DEFAULT_ADDRESS: u8 = 0x40;
+/// Expected value from the manufacturer ID register (Texas Instruments).
 pub const MANUFACTURER_ID: u16 = 0x5449;
 /// Device ID (upper 12 bits of register 0x3F; lower 4 bits are die revision).
 pub const DEVICE_ID: u16 = 0x228;
 
+/// INA228 high-precision digital power monitor driver.
+///
+/// Supports bus/shunt voltage, current, power, energy, and charge measurements
+/// over I2C. Valid addresses are `0x40..=0x4F` (set via A0/A1 pins).
 #[derive(Debug)]
 pub struct Ina228<I2C> {
     i2c: I2C,
@@ -21,6 +27,7 @@ pub struct Ina228<I2C> {
     adc_range: AdcRange,
 }
 
+/// Status flags from the DIAG_ALRT register.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DiagnosticFlags {
     pub memory_status: bool,
@@ -37,6 +44,7 @@ pub struct DiagnosticFlags {
 }
 
 impl<I2C: I2c> Ina228<I2C> {
+    /// Creates a new INA228 driver. Panics if `address` is not in `0x40..=0x4F`.
     pub fn new(i2c: I2C, address: u8) -> Self {
         assert!(
             (0x40..=0x4F).contains(&address),
@@ -51,6 +59,7 @@ impl<I2C: I2c> Ina228<I2C> {
         }
     }
 
+    /// Performs a soft reset, restoring all registers to defaults.
     pub fn reset(&mut self) -> Result<(), I2C::Error> {
         // Bit 15 = RST
         self.write_u16(Register::Config, 1 << 15)?;
@@ -60,6 +69,8 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(())
     }
 
+    /// Configures operating mode, per-channel conversion times, and averaging.
+    /// Writes the ADC_CONFIG register.
     pub fn configure(
         &mut self,
         mode: OperatingMode,
@@ -76,6 +87,7 @@ impl<I2C: I2c> Ina228<I2C> {
         self.write_u16(Register::AdcConfig, value)
     }
 
+    /// Sets the shunt ADC full-scale range. Re-writes SHUNT_CAL if already calibrated.
     pub fn set_adc_range(&mut self, range: AdcRange) -> Result<(), I2C::Error> {
         let config = self.read_u16(Register::Config)?;
         let value = match range {
@@ -132,22 +144,26 @@ impl<I2C: I2c> Ina228<I2C> {
         self.write_u16(Register::ShuntCal, shunt_cal)
     }
 
+    /// Enables shunt temperature compensation with the given coefficient (ppm/°C).
     pub fn set_temp_compensation(&mut self, tempco_ppm: u16) -> Result<(), I2C::Error> {
         let config = self.read_u16(Register::Config)?;
         self.write_u16(Register::Config, config | (1 << 5))?;
         self.write_u16(Register::ShuntTempco, tempco_ppm & 0x3FFF)
     }
 
+    /// Disables shunt temperature compensation.
     pub fn disable_temp_compensation(&mut self) -> Result<(), I2C::Error> {
         let config = self.read_u16(Register::Config)?;
         self.write_u16(Register::Config, config & !(1 << 5))
     }
 
+    /// Returns bus voltage in Volts.
     pub fn bus_voltage(&mut self) -> Result<f32, I2C::Error> {
         let raw = self.read_u24(Register::Vbus)? >> 4;
         Ok(raw as f32 * 195.3125e-6)
     }
 
+    /// Returns shunt voltage in Volts. LSB depends on the configured ADC range.
     pub fn shunt_voltage(&mut self) -> Result<f32, I2C::Error> {
         let raw = self.read_i20(Register::Vshunt)?;
         let lsb = match self.adc_range {
@@ -157,6 +173,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f32 * lsb)
     }
 
+    /// Returns current in Amps. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn current(&mut self) -> Result<f32, I2C::Error> {
         debug_assert!(
             self.current_lsb != 0.0,
@@ -166,6 +183,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f32 * self.current_lsb)
     }
 
+    /// Returns power in Watts. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn power(&mut self) -> Result<f32, I2C::Error> {
         debug_assert!(
             self.current_lsb != 0.0,
@@ -175,6 +193,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f32 * 3.2 * self.current_lsb)
     }
 
+    /// Returns accumulated energy in Joules. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn energy(&mut self) -> Result<f64, I2C::Error> {
         debug_assert!(
             self.current_lsb != 0.0,
@@ -184,6 +203,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f64 * 16.0 * 3.2 * self.current_lsb as f64)
     }
 
+    /// Returns accumulated charge in Coulombs. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn charge(&mut self) -> Result<f64, I2C::Error> {
         debug_assert!(
             self.current_lsb != 0.0,
@@ -193,21 +213,25 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f64 * self.current_lsb as f64)
     }
 
+    /// Returns die temperature in degrees Celsius.
     pub fn die_temperature(&mut self) -> Result<f32, I2C::Error> {
         let raw = self.read_u16(Register::DieTemp)? as i16;
         Ok(raw as f32 * 7.8125e-3)
     }
 
+    /// Resets the energy and charge accumulator registers to zero.
     pub fn reset_accumulators(&mut self) -> Result<(), I2C::Error> {
         let config = self.read_u16(Register::Config)?;
         self.write_u16(Register::Config, config | (1 << 14))
     }
 
+    /// Returns `true` if a new conversion result is available.
     pub fn conversion_ready(&mut self) -> Result<bool, I2C::Error> {
         let diag = self.read_u16(Register::DiagAlrt)?;
         Ok(diag & (1 << 1) != 0)
     }
 
+    /// Reads all diagnostic and alert flags from the DIAG_ALRT register.
     pub fn diagnostic_flags(&mut self) -> Result<DiagnosticFlags, I2C::Error> {
         let d = self.read_u16(Register::DiagAlrt)?;
         Ok(DiagnosticFlags {
@@ -296,6 +320,7 @@ impl<I2C: I2c> Ina228<I2C> {
         self.write_u16(Register::PwrLimit, raw)
     }
 
+    /// Reads the manufacturer ID register (expected: `0x5449` for TI).
     pub fn manufacturer_id(&mut self) -> Result<u16, I2C::Error> {
         self.read_u16(Register::ManufacturerId)
     }
@@ -310,6 +335,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok((self.read_u16(Register::DeviceId)? & 0xF) as u8)
     }
 
+    /// Consumes the driver and returns the underlying I2C bus.
     pub fn release(self) -> I2C {
         self.i2c
     }

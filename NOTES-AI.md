@@ -7,7 +7,7 @@ src/
 ├── lib.rs          # Driver struct, public API, I2C helpers
 ├── registers.rs    # Register addresses, config enums (AdcRange, ConversionTime, etc.)
 tests/
-└── driver_tests.rs # 42 integration tests using embedded-hal-mock
+└── driver_tests.rs # 47 integration tests using embedded-hal-mock
 examples/
 └── esp32/          # Standalone ESP32 project (esp-idf-hal + esp-idf-svc)
     ├── Cargo.toml
@@ -42,7 +42,6 @@ examples/
 - `energy()` → f64 (Joules, accumulator, requires calibrate())
 - `charge()` → f64 (Coulombs, signed accumulator, requires calibrate())
 - `die_temperature()` → f32 (°C)
-- `read_instant()` → Measurements struct (bus, shunt, current, power, temp)
 
 ### Configuration
 - `reset()` — soft reset all registers
@@ -80,10 +79,10 @@ examples/
 
 ## Testing
 
-- 46 integration tests in `tests/driver_tests.rs` using `embedded-hal-mock` (eh1 feature)
+- 47 integration tests in `tests/driver_tests.rs` using `embedded-hal-mock` (eh1 feature)
 - Uses I2C mock with expected transactions to verify all register reads/writes
 - Covers: construction, reset, configure, calibrate, all measurements, sign extension,
-  temp compensation, alerts, diagnostic flags, thresholds, IDs, read_instant
+  temp compensation, alerts, diagnostic flags, thresholds, IDs, error propagation, rollback
 
 ## Dependencies
 

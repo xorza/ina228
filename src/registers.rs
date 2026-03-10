@@ -23,6 +23,7 @@ pub enum Register {
     DeviceId = 0x3F,
 }
 
+/// Shunt ADC full-scale range selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdcRange {
     /// ±163.84 mV, LSB = 312.5 nV
@@ -31,6 +32,7 @@ pub enum AdcRange {
     Range40mV = 1,
 }
 
+/// ADC conversion time per sample.
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum ConversionTime {
@@ -44,6 +46,7 @@ pub enum ConversionTime {
     Us4120 = 7,
 }
 
+/// Number of ADC samples to average per conversion result.
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum AveragingCount {
@@ -57,6 +60,8 @@ pub enum AveragingCount {
     N1024 = 7,
 }
 
+/// ADC operating mode: selects which channels to measure and whether to
+/// run continuously or in single-shot (triggered) mode.
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum OperatingMode {

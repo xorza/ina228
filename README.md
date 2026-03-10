@@ -25,17 +25,19 @@ ina.configure(
     ConversionTime::Us1052,
     ConversionTime::Us1052,
     AveragingCount::N64,
-);
+).unwrap();
 
 // Calibrate for 10A max expected current, 2mΩ shunt resistor
-ina.calibrate(10.0, 0.002);
+ina.calibrate(10.0, 0.002).unwrap();
 
 // Wait for conversion and read
-while !ina.conversion_ready() {
+while !ina.conversion_ready().unwrap() {
     // sleep or yield here
 }
-let m = ina.read_instant();
-// m.bus_voltage_v, m.current_a, m.power_w, m.die_temp_c
+let voltage = ina.bus_voltage().unwrap();
+let current = ina.current().unwrap();
+let power = ina.power().unwrap();
+let temp = ina.die_temperature().unwrap();
 ```
 
 ## Features
