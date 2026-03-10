@@ -13,8 +13,8 @@ fn main() {
     let peripherals = Peripherals::take().unwrap();
     let i2c = I2cDriver::new(
         peripherals.i2c0,
-        peripherals.pins.gpio21, // SDA
-        peripherals.pins.gpio22, // SCL
+        peripherals.pins.gpio8, // SDA
+        peripherals.pins.gpio9, // SCL
         &I2cConfig::new().baudrate(Hertz(400_000)),
     )
     .unwrap();

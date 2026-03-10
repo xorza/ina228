@@ -80,14 +80,13 @@ The INA228 supports 16 addresses (0x40-0x4F) configured via A0 and A1 pins:
 | SCL | SDA | 0x4E    |
 | SCL | SCL | 0x4F    |
 
-## ESP32 Example
+## ESP32-C3 Example
 
-A complete ESP32 example is in [`examples/esp32/`](examples/esp32/). It requires the [ESP Rust toolchain](https://github.com/esp-rs/rust-build) and an ESP32 with an INA228 connected via I2C.
+A complete ESP32-C3 example is in [`examples/esp32/`](examples/esp32/). It requires the ESP-IDF Rust toolchain and an ESP32-C3 with an INA228 connected via I2C (GPIO8 SDA, GPIO9 SCL).
 
 ```sh
 cd examples/esp32
-cargo build --release
-espflash flash --monitor target/xtensa-esp32-espidf/release/esp32-ina228-example
+cargo run --release
 ```
 
 ## License
