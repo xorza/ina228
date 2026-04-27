@@ -10,7 +10,7 @@ The INA228 measures bus voltage (0-85V), shunt voltage, current, power, energy, 
 
 ```toml
 [dependencies]
-ina228 = "0.1"
+ina228 = "0.2"
 ```
 
 ## Usage
@@ -82,9 +82,9 @@ The INA228 supports 16 addresses (0x40-0x4F) configured via A0 and A1 pins:
 | SCL | SDA | 0x4E    |
 | SCL | SCL | 0x4F    |
 
-## ESP32-C3 Example
+## ESP32 Example
 
-A complete ESP32-C3 example is in [`examples/esp32/`](examples/esp32/). It requires the ESP-IDF Rust toolchain and an ESP32-C3 with an INA228 connected via I2C (GPIO8 SDA, GPIO9 SCL).
+A complete ESP32 example is in [`examples/esp32/`](examples/esp32/). It requires the ESP-IDF Rust toolchain and an ESP32 with an INA228 connected via I2C (GPIO8 SDA, GPIO9 SCL). The example's `.cargo/config.toml` is preconfigured for ESP32-C6; adjust `target` and `MCU` for other RISC-V variants (e.g. C3, C2).
 
 ```sh
 cd examples/esp32
