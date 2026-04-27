@@ -1,5 +1,7 @@
 # ina228
 
+<img src="docs/ina228.png" alt="INA228 breakout board" width="400" />
+
 Platform-agnostic, `no_std` Rust driver for the [TI INA228](https://www.ti.com/product/INA228) high-side power/energy/charge monitor, built on [`embedded-hal`](https://crates.io/crates/embedded-hal) 1.0.
 
 The INA228 measures bus voltage (0-85V), shunt voltage, current, power, energy, and charge over I2C with 20-bit ADC resolution.

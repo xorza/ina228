@@ -1,7 +1,8 @@
 [build]
-target = "riscv32imc-esp-espidf"
+target = "riscv32imac-esp-espidf"
+target-dir = "/home/xxorza/.cargo/target"
 
-[target.riscv32imc-esp-espidf]
+[target.riscv32imac-esp-espidf]
 linker = "ldproxy"
 runner = "espflash flash --monitor"
 rustflags = ["--cfg", "espidf_time64"]
@@ -10,5 +11,6 @@ rustflags = ["--cfg", "espidf_time64"]
 build-std = ["std", "panic_abort"]
 
 [env]
-MCU = "esp32c3"
-ESP_IDF_VERSION = "v5.5.3"
+MCU = "esp32c6"
+ESP_IDF_VERSION = "v5.5.4"
+ESP_IDF_TOOLS_INSTALL_DIR = "global"
