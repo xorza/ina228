@@ -27,6 +27,25 @@ pub struct Ina228<I2C> {
     adc_range: AdcRange,
 }
 
+/// Alert pin configuration written to the upper bits of DIAG_ALRT.
+///
+/// All fields default to `false`. Use struct-update syntax to set only what you need:
+///
+/// ```ignore
+/// ina.configure_alerts(AlertConfig { latch: true, active_high: true, ..Default::default() })?;
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlertConfig {
+    /// Latch alerts until DIAG_ALRT is read (vs. transparent mode).
+    pub latch: bool,
+    /// ALERT pin polarity: `true` = active high, `false` = active low.
+    pub active_high: bool,
+    /// Assert ALERT on conversion-ready.
+    pub conversion_ready: bool,
+    /// Compare alerts against the averaged ADC value rather than each conversion.
+    pub slow_alert: bool,
+}
+
 /// Status flags from the DIAG_ALRT register.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DiagnosticFlags {
@@ -249,31 +268,21 @@ impl<I2C: I2c> Ina228<I2C> {
         })
     }
 
-    /// Configure alert pin behavior via DIAG_ALRT upper bits.
-    /// `latch`: true to latch alerts until read, false for transparent mode.
-    /// `active_high`: true for active-high ALERT pin, false for active-low.
-    /// `conversion_ready_alert`: true to assert ALERT on conversion complete.
-    /// `slow_alert`: true to use averaged value for alert comparison.
-    pub fn configure_alerts(
-        &mut self,
-        latch: bool,
-        active_high: bool,
-        conversion_ready_alert: bool,
-        slow_alert: bool,
-    ) -> Result<(), I2C::Error> {
+    /// Configures alert pin behavior (DIAG_ALRT upper bits). Preserves the lower
+    /// 10 status-flag bits.
+    pub fn configure_alerts(&mut self, cfg: AlertConfig) -> Result<(), I2C::Error> {
         let diag = self.read_u16(Register::DiagAlrt)?;
-        let mask = 0x3FF; // keep lower 10 flag bits
-        let mut value = diag & mask;
-        if conversion_ready_alert {
+        let mut value = diag & 0x03FF;
+        if cfg.conversion_ready {
             value |= 1 << 14;
         }
-        if slow_alert {
+        if cfg.slow_alert {
             value |= 1 << 13;
         }
-        if active_high {
+        if cfg.active_high {
             value |= 1 << 12;
         }
-        if latch {
+        if cfg.latch {
             value |= 1 << 11;
         }
         self.write_u16(Register::DiagAlrt, value)
