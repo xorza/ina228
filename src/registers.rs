@@ -24,6 +24,9 @@ pub(crate) enum Register {
 }
 
 pub(crate) mod config {
+    pub(crate) const RESET: u16 = 1 << 15;
+    pub(crate) const RESET_ACCUMULATORS: u16 = 1 << 14;
+    pub(crate) const TEMPERATURE_COMPENSATION: u16 = 1 << 5;
     pub(crate) const ADC_RANGE: u16 = 1 << 4;
 }
 

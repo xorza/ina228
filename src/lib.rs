@@ -216,8 +216,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Performs a soft reset, restoring all registers to defaults.
     pub fn reset(&mut self) -> Result<(), Error<I2C::Error>> {
-        // Bit 15 = RST
-        self.write_u16(Register::Config, 1 << 15)?;
+        self.write_u16(Register::Config, config::RESET)?;
         self.calibration = None;
         self.adc_range = AdcRange::Range163mV;
         Ok(())
@@ -297,15 +296,21 @@ impl<I2C: I2c> Ina228<I2C> {
                 ConfigurationError::TemperatureCoefficient,
             ));
         }
-        let config = self.read_u16(Register::Config)?;
+        let config_value = self.read_u16(Register::Config)?;
         self.write_u16(Register::ShuntTempco, tempco_ppm)?;
-        self.write_u16(Register::Config, config | (1 << 5))
+        self.write_u16(
+            Register::Config,
+            config_value | config::TEMPERATURE_COMPENSATION,
+        )
     }
 
     /// Disables shunt temperature compensation.
     pub fn disable_temp_compensation(&mut self) -> Result<(), Error<I2C::Error>> {
-        let config = self.read_u16(Register::Config)?;
-        self.write_u16(Register::Config, config & !(1 << 5))
+        let config_value = self.read_u16(Register::Config)?;
+        self.write_u16(
+            Register::Config,
+            config_value & !config::TEMPERATURE_COMPENSATION,
+        )
     }
 
     /// Returns bus voltage in Volts.
@@ -368,8 +373,8 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Resets the energy and charge accumulator registers to zero.
     pub fn reset_accumulators(&mut self) -> Result<(), Error<I2C::Error>> {
-        let config = self.read_u16(Register::Config)?;
-        self.write_u16(Register::Config, config | (1 << 14))
+        let config_value = self.read_u16(Register::Config)?;
+        self.write_u16(Register::Config, config_value | config::RESET_ACCUMULATORS)
     }
 
     /// Returns `true` if a new conversion result is available.
