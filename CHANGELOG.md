@@ -21,6 +21,8 @@
 - Programmed SHUNT_TEMPCO before enabling temperature compensation so partial failures cannot activate a stale coefficient.
 - Calibration now resets ENERGY and CHARGE before becoming valid, preventing accumulated samples from being interpreted with a different `CURRENT_LSB` scale.
 - ADC range transitions no longer allow conversions to run with mismatched ADCRANGE and SHUNT_CAL values.
+- Calibration and temperature-compensation changes now suspend conversions and restart active modes, clearing stale conversion-ready state before new-scale results are consumed.
+- Both ADC_CONFIG shutdown encodings are preserved across calibration, range, and temperature-compensation changes.
 - Diagnostic and accumulator reads no longer discard clear-on-read status without returning the captured flags.
 
 ## 0.2.0 - 2026-04-27

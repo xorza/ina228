@@ -32,6 +32,7 @@ pub(crate) mod config {
 
 pub(crate) mod adc_config {
     pub(crate) const MODE_MASK: u16 = 0xF << 12;
+    pub(crate) const ALTERNATE_SHUTDOWN_MODE: u16 = 8 << 12;
 }
 
 pub(crate) mod diagnostic_alert {
