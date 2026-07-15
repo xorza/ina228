@@ -13,6 +13,7 @@
 - **Breaking:** `take_accumulator_snapshot()` now returns `ConfigurationError::AccumulatorMode` outside continuous conversion modes and briefly suspends conversion for a coherent capture.
 - **Breaking:** Fallible methods now return `Error<I2C::Error>`, distinguishing I2C failures from `ConfigurationError` values.
 - **Breaking:** Range-scaled operations now return `Error::AdcRangeUnknown` after an ambiguous RESET or ADCRANGE write until state is recovered.
+- **Breaking:** `calibrate()` now resets PWR_LIMIT to `0xFFFF`; callers must configure their desired watt threshold again after calibration.
 - Physical-unit setters round to the nearest register value instead of truncating.
 
 ### Fixed
@@ -28,6 +29,7 @@
 - Diagnostic and accumulator reads no longer discard clear-on-read status without returning the captured flags.
 - Accumulator snapshots no longer race continuous updates between DIAG_ALRT, ENERGY, and CHARGE reads.
 - RESET, ADCRANGE, and SHUNT_CAL write failures now invalidate dependent cached scale state before returning the I2C error.
+- Recalibration no longer silently changes the physical watt value represented by an existing PWR_LIMIT register value.
 
 ## 0.2.0 - 2026-04-27
 

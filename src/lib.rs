@@ -339,19 +339,22 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Calibrate for current, power, energy, and charge measurement.
     ///
-    /// Conversions are suspended while SHUNT_CAL and the accumulators are updated,
-    /// then the previous ADC configuration is restored. Restoring a non-shutdown
-    /// mode starts a fresh conversion and clears the previous conversion-ready flag;
-    /// this method does not wait for conversion completion. If the previous mode was
-    /// shutdown, call [`configure`](Self::configure) before waiting for fresh data.
+    /// Conversions are suspended while SHUNT_CAL and the accumulators are updated.
+    /// PWR_LIMIT is reset to its least-restrictive value because its physical scale
+    /// changes with CURRENT_LSB; call [`set_power_limit`](Self::set_power_limit) afterward
+    /// to restore the desired watt threshold. The previous ADC configuration is then
+    /// restored. Restoring a non-shutdown mode starts a fresh conversion and clears the
+    /// previous conversion-ready flag; this method does not wait for conversion completion.
+    /// If the previous mode was shutdown, call [`configure`](Self::configure) before
+    /// waiting for fresh data.
     ///
     /// If an I2C failure occurs after conversions are suspended, the ADC remains in
     /// shutdown mode. The previous calibration is invalidated before SHUNT_CAL is written
     /// because an I2C error does not prove whether the device accepted the new value.
-    /// Any SHUNT_CAL or accumulator-reset failure requires another `calibrate()` call.
-    /// If the ADC range was made unknown by an earlier error, calibration reads CONFIG
-    /// to recover it. Use [`configure`](Self::configure) to resume conversions after an
-    /// error.
+    /// Any SHUNT_CAL, accumulator-reset, or PWR_LIMIT failure requires another
+    /// `calibrate()` call. If the ADC range was made unknown by an earlier error,
+    /// calibration reads CONFIG to recover it. Use [`configure`](Self::configure) to
+    /// resume conversions after an error.
     /// `max_current_a`: maximum expected current in Amps.
     /// `shunt_resistance_ohm`: shunt resistor value in Ohms.
     pub fn calibrate(
@@ -383,6 +386,7 @@ impl<I2C: I2c> Ina228<I2C> {
         self.calibration = None;
         self.write_u16(Register::ShuntCal, shunt_cal)?;
         self.reset_accumulators()?;
+        self.write_u16(Register::PwrLimit, u16::MAX)?;
         self.adc_range = Some(adc_range);
         self.calibration = Some(calibration);
         self.restore_conversions(suspended)

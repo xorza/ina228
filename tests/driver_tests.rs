@@ -41,13 +41,14 @@ fn mock(transactions: &[Transaction]) -> Mock {
     mock_with_config(0, transactions)
 }
 
-fn active_calibration_txns(shunt_cal: u16, config: u16) -> [Transaction; 6] {
+fn active_calibration_txns(shunt_cal: u16, config: u16) -> [Transaction; 7] {
     [
         read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
         write_txn(0x01, SHUTDOWN_ADC_CONFIG),
         write_txn(0x02, shunt_cal),
         read_txn(0x00, &config.to_be_bytes()),
         write_txn(0x00, config | (1 << 14)),
+        write_txn(0x11, u16::MAX),
         write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]
 }
@@ -218,6 +219,7 @@ fn reset_write_failure_invalidates_scale_state_until_recovery() {
             write_txn(0x02, shunt_cal),
             read_txn(0x00, &(1_u16 << 4).to_be_bytes()),
             write_txn(0x00, (1 << 14) | (1 << 4)),
+            write_txn(0x11, u16::MAX),
             write_txn(0x01, DEFAULT_ADC_CONFIG),
             read_txn(0x07, &u24_bytes(262144 << 4)),
         ],
@@ -415,6 +417,7 @@ fn calibrate_with_40mv_range() {
         write_txn(0x02, shunt_cal),
         read_txn(0x00, &(1_u16 << 4).to_be_bytes()),
         write_txn(0x00, (1 << 14) | (1 << 4)),
+        write_txn(0x11, u16::MAX),
         write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
@@ -1015,6 +1018,24 @@ fn set_power_limit() {
 }
 
 #[test]
+fn calibrate_resets_existing_power_limit() {
+    let initial_shunt_cal = expected_shunt_cal(10.0, 0.01, false);
+    let replacement_shunt_cal = expected_shunt_cal(5.0, 0.01, false);
+    let initial_current_lsb = 10.0_f32 / 524_288.0;
+    let initial_limit = (100.0_f32 / (256.0 * 3.2 * initial_current_lsb)).round() as u16;
+    let mut transactions = Vec::from(active_calibration_txns(initial_shunt_cal, 0));
+    transactions.push(write_txn(0x11, initial_limit));
+    transactions.extend(active_calibration_txns(replacement_shunt_cal, 0));
+    let i2c = mock(&transactions);
+    let mut ina = Ina228::new(i2c, ADDR).unwrap();
+
+    ina.calibrate(10.0, 0.01).unwrap();
+    ina.set_power_limit(100.0).unwrap();
+    ina.calibrate(5.0, 0.01).unwrap();
+    ina.release().done();
+}
+
+#[test]
 fn physical_limit_setters_reject_invalid_values_before_i2c() {
     let i2c = mock(&[]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
@@ -1252,6 +1273,7 @@ fn calibrate_preserves_shutdown_modes() {
             write_txn(0x02, shunt_cal),
             read_txn(0x00, &0x0000_u16.to_be_bytes()),
             write_txn(0x00, 1 << 14),
+            write_txn(0x11, u16::MAX),
         ]);
         let mut ina = Ina228::new(i2c, ADDR).unwrap();
         ina.calibrate(10.0, 0.01).unwrap();
@@ -1335,6 +1357,32 @@ fn calibrate_failures_leave_safe_state() {
     );
     ina.release().done();
 
+    let failed_power_limit =
+        Transaction::write(ADDR, vec![0x11, 0xFF, 0xFF]).with_error(ErrorKind::Bus);
+    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_ok, 0));
+    transactions.extend([
+        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
+        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
+        write_txn(0x02, shunt_cal_fail),
+        read_txn(0x00, &0x0000_u16.to_be_bytes()),
+        write_txn(0x00, 1 << 14),
+        failed_power_limit,
+        write_txn(0x01, DEFAULT_ADC_CONFIG),
+    ]);
+    let i2c = mock(&transactions);
+    let mut ina = Ina228::new(i2c, ADDR).unwrap();
+    ina.calibrate(10.0, 0.01).unwrap();
+
+    assert_eq!(
+        ina.calibrate(2.0, 0.04),
+        Err(DriverError::I2c(ErrorKind::Bus))
+    );
+    assert_panics_with("call calibrate() before reading current", || {
+        let _ = ina.current();
+    });
+    ina.configure(AdcConfig::default()).unwrap();
+    ina.release().done();
+
     let failed_restore =
         Transaction::write(ADDR, vec![0x01, 0xFB, 0x68]).with_error(ErrorKind::Bus);
     let i2c = mock(&[
@@ -1343,6 +1391,7 @@ fn calibrate_failures_leave_safe_state() {
         write_txn(0x02, shunt_cal_fail),
         read_txn(0x00, &0x0000_u16.to_be_bytes()),
         write_txn(0x00, 1 << 14),
+        write_txn(0x11, u16::MAX),
         failed_restore,
         read_txn(0x07, &u24_bytes(262144 << 4)),
         write_txn(0x01, DEFAULT_ADC_CONFIG),
