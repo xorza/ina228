@@ -58,6 +58,8 @@ let temp = ina.die_temperature().unwrap();
 
 Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, power, energy, or charge. The `max_current_a` parameter sets the measurement resolution — use the maximum current your load will draw, not the theoretical maximum of the shunt.
 
+Calibration resets the energy and charge accumulators so their entire contents use the new `CURRENT_LSB` scale. If SHUNT_CAL is written but the accumulator reset fails, calibration-dependent operations remain unavailable until `calibrate()` succeeds again.
+
 If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.

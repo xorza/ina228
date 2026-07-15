@@ -278,7 +278,12 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(())
     }
 
-    /// Calibrate for current/power measurement.
+    /// Calibrate for current, power, energy, and charge measurement.
+    ///
+    /// Successful calibration resets the energy and charge accumulators so all
+    /// accumulated samples use the new scale. If SHUNT_CAL succeeds but the
+    /// accumulator reset fails, calibration-dependent operations require
+    /// another `calibrate()` call.
     /// `max_current_a`: maximum expected current in Amps.
     /// `shunt_resistance_ohm`: shunt resistor value in Ohms.
     pub fn calibrate(
@@ -303,6 +308,8 @@ impl<I2C: I2c> Ina228<I2C> {
             .shunt_cal(self.adc_range)
             .map_err(Error::InvalidConfiguration)?;
         self.write_u16(Register::ShuntCal, shunt_cal)?;
+        self.calibration = None;
+        self.reset_accumulators()?;
         self.calibration = Some(calibration);
         Ok(())
     }

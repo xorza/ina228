@@ -16,6 +16,7 @@
 - ADC range changes now validate SHUNT_CAL before changing CONFIG and invalidate calibration if the SHUNT_CAL rewrite fails.
 - Rejected non-finite and unrepresentable calibration, threshold, power-limit, and temperature-coefficient inputs before I2C access.
 - Programmed SHUNT_TEMPCO before enabling temperature compensation so partial failures cannot activate a stale coefficient.
+- Calibration now resets ENERGY and CHARGE before becoming valid, preventing accumulated samples from being interpreted with a different `CURRENT_LSB` scale.
 
 ## 0.2.0 - 2026-04-27
 
