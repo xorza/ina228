@@ -851,10 +851,7 @@ fn set_power_limit() {
     let maximum_power = u16::MAX as f32 * 256.0 * power_lsb;
 
     let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
-    transactions.extend([
-        write_txn(0x11, expected_raw),
-        write_txn(0x11, u16::MAX),
-    ]);
+    transactions.extend([write_txn(0x11, expected_raw), write_txn(0x11, u16::MAX)]);
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     ina.calibrate(10.0, 0.01).unwrap();
