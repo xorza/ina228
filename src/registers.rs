@@ -23,6 +23,10 @@ pub(crate) enum Register {
     DeviceId = 0x3F,
 }
 
+pub(crate) mod config {
+    pub(crate) const ADC_RANGE: u16 = 1 << 4;
+}
+
 pub(crate) mod diagnostic_alert {
     pub(crate) const LATCH: u16 = 1 << 15;
     pub(crate) const CONVERSION_READY_ENABLE: u16 = 1 << 14;

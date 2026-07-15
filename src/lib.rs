@@ -3,7 +3,7 @@
 mod registers;
 
 use embedded_hal::i2c::I2c;
-use registers::{Register, diagnostic_alert};
+use registers::{Register, config, diagnostic_alert};
 
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
@@ -205,8 +205,8 @@ impl<I2C: I2c> Ina228<I2C> {
             calibration: None,
             adc_range: AdcRange::Range163mV,
         };
-        let config = ina.read_u16(Register::Config)?;
-        ina.adc_range = if config & (1 << 4) == 0 {
+        let config_value = ina.read_u16(Register::Config)?;
+        ina.adc_range = if config_value & config::ADC_RANGE == 0 {
             AdcRange::Range163mV
         } else {
             AdcRange::Range40mV
@@ -244,10 +244,10 @@ impl<I2C: I2c> Ina228<I2C> {
             .map(|calibration| calibration.shunt_cal(range))
             .transpose()
             .map_err(Error::InvalidConfiguration)?;
-        let config = self.read_u16(Register::Config)?;
+        let config_value = self.read_u16(Register::Config)?;
         let value = match range {
-            AdcRange::Range163mV => config & !(1 << 4),
-            AdcRange::Range40mV => config | (1 << 4),
+            AdcRange::Range163mV => config_value & !config::ADC_RANGE,
+            AdcRange::Range40mV => config_value | config::ADC_RANGE,
         };
         self.write_u16(Register::Config, value)?;
 
