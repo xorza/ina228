@@ -14,6 +14,27 @@ pub const MANUFACTURER_ID: u16 = 0x5449;
 /// Device ID (upper 12 bits of register 0x3F; lower 4 bits are die revision).
 pub const DEVICE_ID: u16 = 0x228;
 
+#[derive(Debug, Clone, Copy)]
+struct Calibration {
+    current_lsb: f32,
+    shunt_resistance_ohm: f32,
+}
+
+impl Calibration {
+    fn shunt_cal(self, adc_range: AdcRange) -> u16 {
+        let mut shunt_cal = 13107.2e6 * self.current_lsb as f64 * self.shunt_resistance_ohm as f64;
+        if adc_range == AdcRange::Range40mV {
+            shunt_cal *= 4.0;
+        }
+
+        assert!(
+            shunt_cal <= 32767.0,
+            "SHUNT_CAL overflow: reduce max_current or shunt_resistance"
+        );
+        shunt_cal as u16
+    }
+}
+
 /// INA228 high-precision digital power monitor driver.
 ///
 /// Supports bus/shunt voltage, current, power, energy, and charge measurements
@@ -22,8 +43,7 @@ pub const DEVICE_ID: u16 = 0x228;
 pub struct Ina228<I2C> {
     i2c: I2C,
     address: u8,
-    current_lsb: f32,
-    shunt_resistance_ohm: f32,
+    calibration: Option<Calibration>,
     adc_range: AdcRange,
 }
 
@@ -73,8 +93,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Self {
             i2c,
             address,
-            current_lsb: 0.0,
-            shunt_resistance_ohm: 0.0,
+            calibration: None,
             adc_range: AdcRange::Range163mV,
         }
     }
@@ -83,8 +102,7 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn reset(&mut self) -> Result<(), I2C::Error> {
         // Bit 15 = RST
         self.write_u16(Register::Config, 1 << 15)?;
-        self.current_lsb = 0.0;
-        self.shunt_resistance_ohm = 0.0;
+        self.calibration = None;
         self.adc_range = AdcRange::Range163mV;
         Ok(())
     }
@@ -108,7 +126,12 @@ impl<I2C: I2c> Ina228<I2C> {
     }
 
     /// Sets the shunt ADC full-scale range. Re-writes SHUNT_CAL if already calibrated.
+    ///
+    /// If CONFIG succeeds but the SHUNT_CAL write fails, the new range remains active
+    /// and calibration-dependent operations require another [`calibrate`](Self::calibrate) call.
     pub fn set_adc_range(&mut self, range: AdcRange) -> Result<(), I2C::Error> {
+        let calibration = self.calibration;
+        let shunt_cal = calibration.map(|calibration| calibration.shunt_cal(range));
         let config = self.read_u16(Register::Config)?;
         let value = match range {
             AdcRange::Range163mV => config & !(1 << 4),
@@ -118,9 +141,10 @@ impl<I2C: I2c> Ina228<I2C> {
 
         self.adc_range = range;
 
-        // Re-write SHUNT_CAL if already calibrated, since the range multiplier changed.
-        if self.current_lsb != 0.0 {
-            self.write_shunt_cal(self.current_lsb, self.shunt_resistance_ohm)?;
+        if let Some(shunt_cal) = shunt_cal {
+            self.calibration = None;
+            self.write_u16(Register::ShuntCal, shunt_cal)?;
+            self.calibration = calibration;
         }
         Ok(())
     }
@@ -139,29 +163,14 @@ impl<I2C: I2c> Ina228<I2C> {
             "shunt_resistance must be positive"
         );
 
-        let current_lsb = max_current_a / 524_288.0; // 2^19
-        self.write_shunt_cal(current_lsb, shunt_resistance_ohm)?;
-        self.current_lsb = current_lsb;
-        self.shunt_resistance_ohm = shunt_resistance_ohm;
+        let calibration = Calibration {
+            current_lsb: max_current_a / 524_288.0,
+            shunt_resistance_ohm,
+        };
+        let shunt_cal = calibration.shunt_cal(self.adc_range);
+        self.write_u16(Register::ShuntCal, shunt_cal)?;
+        self.calibration = Some(calibration);
         Ok(())
-    }
-
-    fn write_shunt_cal(
-        &mut self,
-        current_lsb: f32,
-        shunt_resistance_ohm: f32,
-    ) -> Result<(), I2C::Error> {
-        let mut shunt_cal = 13107.2e6 * current_lsb as f64 * shunt_resistance_ohm as f64;
-        if self.adc_range == AdcRange::Range40mV {
-            shunt_cal *= 4.0;
-        }
-
-        assert!(
-            shunt_cal <= 32767.0,
-            "SHUNT_CAL overflow: reduce max_current or shunt_resistance"
-        );
-        let shunt_cal = shunt_cal as u16 & 0x7FFF; // 15-bit
-        self.write_u16(Register::ShuntCal, shunt_cal)
     }
 
     /// Enables shunt temperature compensation with the given coefficient (ppm/°C).
@@ -195,42 +204,38 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Returns current in Amps. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn current(&mut self) -> Result<f32, I2C::Error> {
-        debug_assert!(
-            self.current_lsb != 0.0,
-            "call calibrate() before reading current"
-        );
+        let calibration = self
+            .calibration
+            .expect("call calibrate() before reading current");
         let raw = self.read_i20(Register::Current)?;
-        Ok(raw as f32 * self.current_lsb)
+        Ok(raw as f32 * calibration.current_lsb)
     }
 
     /// Returns power in Watts. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn power(&mut self) -> Result<f32, I2C::Error> {
-        debug_assert!(
-            self.current_lsb != 0.0,
-            "call calibrate() before reading power"
-        );
+        let calibration = self
+            .calibration
+            .expect("call calibrate() before reading power");
         let raw = self.read_u24(Register::Power)?;
-        Ok(raw as f32 * 3.2 * self.current_lsb)
+        Ok(raw as f32 * 3.2 * calibration.current_lsb)
     }
 
     /// Returns accumulated energy in Joules. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn energy(&mut self) -> Result<f64, I2C::Error> {
-        debug_assert!(
-            self.current_lsb != 0.0,
-            "call calibrate() before reading energy"
-        );
+        let calibration = self
+            .calibration
+            .expect("call calibrate() before reading energy");
         let raw = self.read_u40(Register::Energy)?;
-        Ok(raw as f64 * 16.0 * 3.2 * self.current_lsb as f64)
+        Ok(raw as f64 * 16.0 * 3.2 * calibration.current_lsb as f64)
     }
 
     /// Returns accumulated charge in Coulombs. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn charge(&mut self) -> Result<f64, I2C::Error> {
-        debug_assert!(
-            self.current_lsb != 0.0,
-            "call calibrate() before reading charge"
-        );
+        let calibration = self
+            .calibration
+            .expect("call calibrate() before reading charge");
         let raw = self.read_i40(Register::Charge)?;
-        Ok(raw as f64 * self.current_lsb as f64)
+        Ok(raw as f64 * calibration.current_lsb as f64)
     }
 
     /// Returns die temperature in degrees Celsius.
@@ -319,11 +324,10 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Set power over-limit in Watts.
     pub fn set_power_limit(&mut self, power_w: f32) -> Result<(), I2C::Error> {
-        debug_assert!(
-            self.current_lsb != 0.0,
-            "call calibrate() before setting power limit"
-        );
-        let power_lsb = 3.2 * self.current_lsb;
+        let calibration = self
+            .calibration
+            .expect("call calibrate() before setting power limit");
+        let power_lsb = 3.2 * calibration.current_lsb;
         let raw = (power_w / (256.0 * power_lsb)) as u16;
         self.write_u16(Register::PwrLimit, raw)
     }

@@ -33,9 +33,9 @@ Two-file driver:
 - `src/lib.rs` — the `Ina228<I2C>` struct and all public API. Methods take `&mut self` and an `embedded-hal` 1.0 `I2c` bus. Errors propagate as `I2C::Error`.
 - `src/registers.rs` — `Register` address enum plus the public configuration enums (`AdcRange`, `ConversionTime`, `AveragingCount`, `OperatingMode`) re-exported from `lib.rs`.
 
-Key state held in `Ina228`: `current_lsb` and `shunt_resistance_ohm` (set by `calibrate()`) and `adc_range`. Several scaling computations (current, power, energy, charge, SHUNT_CAL) depend on these, so when changing calibration logic check all readout methods.
+Key state held in `Ina228`: `calibration: Option<Calibration>` (containing `current_lsb` and `shunt_resistance_ohm`) and `adc_range`. Calibration is absent after construction, reset, or a failed range-dependent SHUNT_CAL rewrite. Current, power, energy, charge, power-limit, and SHUNT_CAL calculations depend on it.
 
-`set_adc_range()` automatically rewrites SHUNT_CAL because the calibration constant differs by 4× between the two ranges. Preserve this invariant for any new range/calibration paths.
+`set_adc_range()` precomputes the new SHUNT_CAL because the calibration constant differs by 4× between ranges, writes CONFIG, then rewrites SHUNT_CAL. A failed CONFIG write preserves the old state; a failed SHUNT_CAL write preserves the new range and invalidates calibration. Preserve this transition for new range/calibration paths.
 
 `AlertConfig` is a struct passed to `configure_alerts()`; fields default to `false` so callers use struct-update syntax. Don't reintroduce the previous boolean-parameter form (see commit a5a0125).
 

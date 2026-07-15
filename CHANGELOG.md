@@ -3,9 +3,11 @@
 ### Changed
 - Renamed `DiagnosticFlags::memory_status` to `memory_ok` and removed its `Default` implementation.
 - `configure_alerts()` now writes DIAG_ALRT directly; configuring alerts acknowledges any latched alert flags.
+- Calibration is now tracked explicitly and all calibration-dependent operations enforce their precondition in release builds.
 
 ### Fixed
 - Corrected the DIAG_ALRT bit mapping for alert latching, memory status, energy and charge overflow, and math overflow.
+- ADC range changes now validate SHUNT_CAL before changing CONFIG and invalidate calibration if the SHUNT_CAL rewrite fails.
 
 ## 0.2.0 - 2026-04-27
 

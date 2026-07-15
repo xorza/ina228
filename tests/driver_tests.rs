@@ -25,6 +25,20 @@ fn read_txn(reg: u8, bytes: &[u8]) -> Transaction {
     Transaction::write_read(ADDR, vec![reg], bytes.to_vec())
 }
 
+fn assert_panics_with(expected_message: &str, operation: impl FnOnce()) {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation))
+        .expect_err("expected operation to panic");
+    let message = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .expect("panic payload must be a string");
+    assert!(
+        message.contains(expected_message),
+        "expected panic containing {expected_message:?}, got {message:?}"
+    );
+}
+
 fn u24_bytes(val: u32) -> [u8; 3] {
     [(val >> 16) as u8, (val >> 8) as u8, val as u8]
 }
@@ -83,6 +97,9 @@ fn reset() {
     ina.reset().unwrap();
     // bus_voltage should still work after reset (doesn't need calibration)
     assert_eq!(ina.bus_voltage().unwrap(), 0.0);
+    assert_panics_with("call calibrate() before reading current", || {
+        let _ = ina.current();
+    });
     ina.release().done();
 }
 
@@ -182,6 +199,30 @@ fn calibrate_zero_shunt_panics() {
     let i2c = Mock::new(&[]);
     let mut ina = Ina228::new(i2c, ADDR);
     ina.calibrate(10.0, 0.0).unwrap();
+}
+
+#[test]
+fn calibration_required_operations_panic_before_i2c() {
+    let i2c = Mock::new(&[]);
+    let mut ina = Ina228::new(i2c, ADDR);
+
+    assert_panics_with("call calibrate() before reading current", || {
+        let _ = ina.current();
+    });
+    assert_panics_with("call calibrate() before reading power", || {
+        let _ = ina.power();
+    });
+    assert_panics_with("call calibrate() before reading energy", || {
+        let _ = ina.energy();
+    });
+    assert_panics_with("call calibrate() before reading charge", || {
+        let _ = ina.charge();
+    });
+    assert_panics_with("call calibrate() before setting power limit", || {
+        let _ = ina.set_power_limit(1.0);
+    });
+
+    ina.release().done();
 }
 
 #[test]
@@ -632,6 +673,83 @@ fn set_adc_range_after_calibrate_recalibrates() {
     let mut ina = Ina228::new(i2c, ADDR);
     ina.calibrate(5.0, 0.01).unwrap();
     ina.set_adc_range(AdcRange::Range40mV).unwrap();
+    ina.release().done();
+}
+
+#[test]
+fn set_adc_range_config_error_preserves_state() {
+    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
+    let i2c = Mock::new(&[
+        write_txn(0x02, shunt_cal),
+        read_txn(0x00, &0x0000_u16.to_be_bytes()),
+        Transaction::write(ADDR, vec![0x00, 0x00, 0x10]).with_error(ErrorKind::Bus),
+        read_txn(0x07, &u24_bytes(262144 << 4)),
+        read_txn(0x04, &u24_bytes(3200 << 4)),
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    ina.calibrate(10.0, 0.01).unwrap();
+
+    assert!(ina.set_adc_range(AdcRange::Range40mV).is_err());
+    assert_eq!(ina.current().unwrap(), 5.0);
+    let shunt_voltage = ina.shunt_voltage().unwrap();
+    assert!(
+        (shunt_voltage - 0.001).abs() < 1e-6,
+        "expected 0.001V in the preserved 163mV range, got {shunt_voltage}"
+    );
+    ina.release().done();
+}
+
+#[test]
+fn set_adc_range_shunt_cal_error_invalidates_calibration() {
+    let shunt_cal_163mv = expected_shunt_cal(5.0, 0.01, false);
+    let shunt_cal_40mv = expected_shunt_cal(5.0, 0.01, true);
+    let shunt_cal_40mv_bytes = shunt_cal_40mv.to_be_bytes();
+    let i2c = Mock::new(&[
+        write_txn(0x02, shunt_cal_163mv),
+        read_txn(0x00, &0x0000_u16.to_be_bytes()),
+        write_txn(0x00, 1 << 4),
+        Transaction::write(
+            ADDR,
+            vec![0x02, shunt_cal_40mv_bytes[0], shunt_cal_40mv_bytes[1]],
+        )
+        .with_error(ErrorKind::Bus),
+        read_txn(0x04, &u24_bytes(12800 << 4)),
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    ina.calibrate(5.0, 0.01).unwrap();
+
+    assert!(ina.set_adc_range(AdcRange::Range40mV).is_err());
+    let shunt_voltage = ina.shunt_voltage().unwrap();
+    assert!(
+        (shunt_voltage - 0.001).abs() < 1e-6,
+        "expected 0.001V in the updated 40mV range, got {shunt_voltage}"
+    );
+    assert_panics_with("call calibrate() before reading current", || {
+        let _ = ina.current();
+    });
+    ina.release().done();
+}
+
+#[test]
+fn set_adc_range_overflow_preserves_state_without_i2c() {
+    let shunt_cal = expected_shunt_cal(100.0, 0.01, false);
+    let i2c = Mock::new(&[
+        write_txn(0x02, shunt_cal),
+        read_txn(0x07, &u24_bytes(262144 << 4)),
+        read_txn(0x04, &u24_bytes(3200 << 4)),
+    ]);
+    let mut ina = Ina228::new(i2c, ADDR);
+    ina.calibrate(100.0, 0.01).unwrap();
+
+    assert_panics_with("SHUNT_CAL overflow", || {
+        let _ = ina.set_adc_range(AdcRange::Range40mV);
+    });
+    assert_eq!(ina.current().unwrap(), 50.0);
+    let shunt_voltage = ina.shunt_voltage().unwrap();
+    assert!(
+        (shunt_voltage - 0.001).abs() < 1e-6,
+        "expected 0.001V in the preserved 163mV range, got {shunt_voltage}"
+    );
     ina.release().done();
 }
 
