@@ -50,4 +50,4 @@ Tests use `embedded-hal-mock` (eh1 feature) to script expected I2C transactions.
 - The crate is `no_std`; do not pull in `std` or `alloc`.
 - Public enums use explicit `#[repr(u8)]` / `#[repr(u16)]` with discriminants matching the datasheet bit patterns — keep them aligned with the INA228 datasheet, not renumbered for ergonomics.
 - MSRV / edition: Rust 2024.
-- Maintain a `CHANGELOG.md` entry for user-visible changes; bump version in `Cargo.toml` and update README install snippet on release.
+- Update `CHANGELOG.md` whenever public behavior or the public API changes. Bump the version in `Cargo.toml` and update the README install snippet on release.
