@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
-pub enum Register {
+pub(crate) enum Register {
     Config = 0x00,
     AdcConfig = 0x01,
     ShuntCal = 0x02,
@@ -43,6 +43,7 @@ pub(crate) mod diagnostic_alert {
 
 /// Shunt ADC full-scale range selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum AdcRange {
     /// ±163.84 mV, LSB = 312.5 nV
     Range163mV = 0,

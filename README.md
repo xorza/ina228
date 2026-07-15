@@ -16,18 +16,18 @@ ina228 = "0.2"
 ## Usage
 
 ```rust
-use ina228::{Ina228, OperatingMode, ConversionTime, AveragingCount, DEFAULT_ADDRESS};
+use ina228::{
+    AdcConfig, AveragingCount, Ina228, DEFAULT_ADDRESS,
+};
 
-let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS);
+let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS).unwrap();
 
 // Configure: continuous bus+shunt+temp, 1052µs conversion, 64x averaging
-ina.configure(
-    OperatingMode::ContinuousAll,
-    ConversionTime::Us1052,
-    ConversionTime::Us1052,
-    ConversionTime::Us1052,
-    AveragingCount::N64,
-).unwrap();
+ina.configure(AdcConfig {
+    averaging: AveragingCount::N64,
+    ..Default::default()
+})
+.unwrap();
 
 // Calibrate for 10A max expected current, 2mΩ shunt resistor
 ina.calibrate(10.0, 0.002).unwrap();
@@ -60,6 +60,10 @@ Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, po
 If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
+
+Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. `Ina228::new()` therefore returns `Result` and can fail with `Error::I2c`.
+
+`AdcConfig::default()` matches the datasheet ADC_CONFIG reset value: continuous conversion of all channels, 1052 µs conversion times, and one-sample averaging.
 
 ## I2C Addresses
 

@@ -1,6 +1,9 @@
 ## Unreleased
 
 ### Changed
+- **Breaking:** `Ina228::new()` now reads CONFIG to synchronize the active ADC range and returns `Result<Self, Error<I2C::Error>>`.
+- **Breaking:** `configure()` now accepts an `AdcConfig` struct with named fields instead of five positional parameters.
+- `AdcConfig::default()` matches the datasheet ADC_CONFIG reset value.
 - Renamed `DiagnosticFlags::memory_status` to `memory_ok` and removed its `Default` implementation.
 - `configure_alerts()` now writes DIAG_ALRT directly; configuring alerts acknowledges any latched alert flags.
 - Calibration is now tracked explicitly and all calibration-dependent operations enforce their precondition in release builds.
@@ -8,6 +11,7 @@
 - Physical-unit setters round to the nearest register value instead of truncating.
 
 ### Fixed
+- Range-dependent readings and calibration now use the ADC range already active when the driver is constructed.
 - Corrected the DIAG_ALRT bit mapping for alert latching, memory status, energy and charge overflow, and math overflow.
 - ADC range changes now validate SHUNT_CAL before changing CONFIG and invalidate calibration if the SHUNT_CAL rewrite fails.
 - Rejected non-finite and unrepresentable calibration, threshold, power-limit, and temperature-coefficient inputs before I2C access.

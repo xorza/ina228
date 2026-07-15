@@ -2,8 +2,7 @@ use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_hal::units::Hertz;
 use ina228::{
-    AveragingCount, ConversionTime, Ina228, OperatingMode, DEFAULT_ADDRESS, DEVICE_ID,
-    MANUFACTURER_ID,
+    AdcConfig, AveragingCount, Ina228, DEFAULT_ADDRESS, DEVICE_ID, MANUFACTURER_ID,
 };
 
 fn main() {
@@ -19,7 +18,7 @@ fn main() {
     )
     .unwrap();
 
-    let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS);
+    let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS).unwrap();
 
     // Verify chip identity
     let mfr = ina.manufacturer_id().unwrap();
@@ -31,13 +30,10 @@ fn main() {
     assert_eq!(dev, DEVICE_ID, "wrong device ID");
 
     // Configure: continuous all, 1052µs conversion, 64x averaging
-    ina.configure(
-        OperatingMode::ContinuousAll,
-        ConversionTime::Us1052,
-        ConversionTime::Us1052,
-        ConversionTime::Us1052,
-        AveragingCount::N64,
-    )
+    ina.configure(AdcConfig {
+        averaging: AveragingCount::N64,
+        ..Default::default()
+    })
     .unwrap();
 
     // Calibrate for 10A max current, 2mΩ shunt resistor (R002)

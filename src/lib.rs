@@ -125,6 +125,35 @@ pub struct Ina228<I2C> {
     adc_range: AdcRange,
 }
 
+/// ADC operating mode, conversion times, and averaging configuration.
+///
+/// The default matches the ADC_CONFIG reset value documented by the INA228 datasheet.
+#[derive(Debug, Clone, Copy)]
+pub struct AdcConfig {
+    /// Channels to measure and whether conversions are triggered or continuous.
+    pub mode: OperatingMode,
+    /// Bus-voltage conversion time.
+    pub bus_conversion_time: ConversionTime,
+    /// Shunt-voltage conversion time.
+    pub shunt_conversion_time: ConversionTime,
+    /// Die-temperature conversion time.
+    pub temperature_conversion_time: ConversionTime,
+    /// Number of ADC samples averaged into each result.
+    pub averaging: AveragingCount,
+}
+
+impl Default for AdcConfig {
+    fn default() -> Self {
+        Self {
+            mode: OperatingMode::ContinuousAll,
+            bus_conversion_time: ConversionTime::Us1052,
+            shunt_conversion_time: ConversionTime::Us1052,
+            temperature_conversion_time: ConversionTime::Us1052,
+            averaging: AveragingCount::N1,
+        }
+    }
+}
+
 /// Alert pin configuration written to the upper bits of DIAG_ALRT.
 ///
 /// All fields default to `false`. Use struct-update syntax to set only what you need:
@@ -162,18 +191,27 @@ pub struct DiagnosticFlags {
 }
 
 impl<I2C: I2c> Ina228<I2C> {
-    /// Creates a new INA228 driver. Panics if `address` is not in `0x40..=0x4F`.
-    pub fn new(i2c: I2C, address: u8) -> Self {
+    /// Creates a driver and reads CONFIG to synchronize the ADC range.
+    ///
+    /// Panics if `address` is not in `0x40..=0x4F`.
+    pub fn new(i2c: I2C, address: u8) -> Result<Self, Error<I2C::Error>> {
         assert!(
             (0x40..=0x4F).contains(&address),
             "INA228 address must be in 0x40..=0x4F"
         );
-        Self {
+        let mut ina = Self {
             i2c,
             address,
             calibration: None,
             adc_range: AdcRange::Range163mV,
-        }
+        };
+        let config = ina.read_u16(Register::Config)?;
+        ina.adc_range = if config & (1 << 4) == 0 {
+            AdcRange::Range163mV
+        } else {
+            AdcRange::Range40mV
+        };
+        Ok(ina)
     }
 
     /// Performs a soft reset, restoring all registers to defaults.
@@ -187,19 +225,12 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Configures operating mode, per-channel conversion times, and averaging.
     /// Writes the ADC_CONFIG register.
-    pub fn configure(
-        &mut self,
-        mode: OperatingMode,
-        vbus_ct: ConversionTime,
-        vshunt_ct: ConversionTime,
-        temp_ct: ConversionTime,
-        avg: AveragingCount,
-    ) -> Result<(), Error<I2C::Error>> {
-        let value = ((mode as u16) << 12)
-            | ((vbus_ct as u16) << 9)
-            | ((vshunt_ct as u16) << 6)
-            | ((temp_ct as u16) << 3)
-            | (avg as u16);
+    pub fn configure(&mut self, config: AdcConfig) -> Result<(), Error<I2C::Error>> {
+        let value = ((config.mode as u16) << 12)
+            | ((config.bus_conversion_time as u16) << 9)
+            | ((config.shunt_conversion_time as u16) << 6)
+            | ((config.temperature_conversion_time as u16) << 3)
+            | (config.averaging as u16);
         self.write_u16(Register::AdcConfig, value)
     }
 
