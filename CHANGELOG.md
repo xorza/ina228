@@ -8,6 +8,8 @@
 - `configure_alerts()` now writes DIAG_ALRT directly; configuring alerts acknowledges any latched alert flags.
 - Calibration is now tracked explicitly and all calibration-dependent operations enforce their precondition in release builds.
 - **Breaking:** ADC range changes now suspend conversions and disable the range-dependent shunt alert thresholds before updating CONFIG and SHUNT_CAL.
+- **Breaking:** Replaced `conversion_ready()` and `diagnostic_flags()` with the explicit `take_diagnostic_flags()` acknowledgement operation.
+- **Breaking:** Replaced separate `energy()` and `charge()` reads with `take_accumulator_snapshot()`, which returns both values and their pre-read diagnostic state in `AccumulatorSnapshot`.
 - **Breaking:** Fallible methods now return `Error<I2C::Error>`, distinguishing I2C failures from `ConfigurationError` values.
 - Physical-unit setters round to the nearest register value instead of truncating.
 
@@ -19,6 +21,7 @@
 - Programmed SHUNT_TEMPCO before enabling temperature compensation so partial failures cannot activate a stale coefficient.
 - Calibration now resets ENERGY and CHARGE before becoming valid, preventing accumulated samples from being interpreted with a different `CURRENT_LSB` scale.
 - ADC range transitions no longer allow conversions to run with mismatched ADCRANGE and SHUNT_CAL values.
+- Diagnostic and accumulator reads no longer discard clear-on-read status without returning the captured flags.
 
 ## 0.2.0 - 2026-04-27
 

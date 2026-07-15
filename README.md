@@ -33,9 +33,12 @@ ina.configure(AdcConfig {
 // Calibrate for 10A max expected current, 2mΩ shunt resistor
 ina.calibrate(10.0, 0.002).unwrap();
 
-// Wait for conversion and read
-while !ina.conversion_ready().unwrap() {
-    // sleep or yield here
+// Polling acknowledges every snapshot; production code must handle every returned flag.
+loop {
+    let flags = ina.take_diagnostic_flags().unwrap();
+    if flags.conversion_ready {
+        break;
+    }
 }
 let voltage = ina.bus_voltage().unwrap();
 let current = ina.current().unwrap();
@@ -60,9 +63,11 @@ Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, po
 
 Calibration resets the energy and charge accumulators so their entire contents use the new `CURRENT_LSB` scale. If SHUNT_CAL is written but the accumulator reset fails, calibration-dependent operations remain unavailable until `calibrate()` succeeds again.
 
-If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. Range changes suspend conversions and disable the shunt over- and under-voltage alerts because those thresholds use a range-dependent scale; configure both thresholds again afterward. The previous ADC configuration is restored on success, but wait for a new conversion before reading measurements produced under the new range.
+If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. Range changes suspend conversions and disable the shunt over- and under-voltage alerts because those thresholds use a range-dependent scale; configure both thresholds again afterward. The previous ADC configuration is restored on success. `set_adc_range()` does not wait for fresh data, so the caller must wait for a new conversion before reading measurements produced under the new range.
 
 An I2C failure after conversions are suspended leaves the ADC in shutdown mode and may already have disabled one or both shunt alerts. Call `configure()` to resume conversions. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
+
+`take_diagnostic_flags()` reads and acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` returns energy, charge, and the complete diagnostic snapshot captured before reading ENERGY and CHARGE clears their overflow indicators.
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
 

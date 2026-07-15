@@ -182,7 +182,7 @@ pub struct AlertConfig {
     pub slow_alert: bool,
 }
 
-/// Status flags from the DIAG_ALRT register.
+/// Snapshot of status flags from the DIAG_ALRT register.
 #[derive(Debug, Clone, Copy)]
 pub struct DiagnosticFlags {
     /// `true` when the device trim memory checksum is valid.
@@ -197,6 +197,15 @@ pub struct DiagnosticFlags {
     pub bus_under_limit: bool,
     pub power_over_limit: bool,
     pub charge_overflow: bool,
+}
+
+/// Energy, charge, and diagnostic state captured by [`Ina228::take_accumulator_snapshot`].
+#[derive(Debug, Clone, Copy)]
+pub struct AccumulatorSnapshot {
+    pub energy_joules: f64,
+    pub charge_coulombs: f64,
+    /// Flags captured before reading ENERGY and CHARGE clears their overflow indicators.
+    pub diagnostic_flags: DiagnosticFlags,
 }
 
 impl<I2C: I2c> Ina228<I2C> {
@@ -256,7 +265,8 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Changing range disables the shunt over- and under-voltage alerts because their
     /// register scale depends on the selected range. Conversions are suspended while
     /// CONFIG and SHUNT_CAL are updated, then the previous ADC configuration is restored.
-    /// Wait for a new conversion before reading measurements produced under the new range.
+    /// The caller must wait for a new conversion before reading measurements produced
+    /// under the new range; this method does not wait for conversion completion.
     ///
     /// An I2C failure after conversions are suspended leaves the ADC in shutdown mode.
     /// If CONFIG succeeds but the SHUNT_CAL write fails, the new range remains active
@@ -399,22 +409,26 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f32 * 3.2 * calibration.current_lsb)
     }
 
-    /// Returns accumulated energy in Joules. Requires prior [`calibrate`](Self::calibrate) call.
-    pub fn energy(&mut self) -> Result<f64, Error<I2C::Error>> {
+    /// Takes an energy, charge, and diagnostic snapshot.
+    ///
+    /// Reading DIAG_ALRT acknowledges conversion-ready and any latched threshold alerts.
+    /// Reading ENERGY and CHARGE then clears their respective overflow indicators. The
+    /// returned diagnostic flags contain the overflow state captured before those reads.
+    ///
+    /// If a later I2C transaction fails, earlier acknowledgement and clear-on-read side
+    /// effects may already have occurred.
+    pub fn take_accumulator_snapshot(&mut self) -> Result<AccumulatorSnapshot, Error<I2C::Error>> {
         let calibration = self
             .calibration
-            .expect("call calibrate() before reading energy");
-        let raw = self.read_u40(Register::Energy)?;
-        Ok(raw as f64 * 16.0 * 3.2 * calibration.current_lsb as f64)
-    }
-
-    /// Returns accumulated charge in Coulombs. Requires prior [`calibrate`](Self::calibrate) call.
-    pub fn charge(&mut self) -> Result<f64, Error<I2C::Error>> {
-        let calibration = self
-            .calibration
-            .expect("call calibrate() before reading charge");
-        let raw = self.read_i40(Register::Charge)?;
-        Ok(raw as f64 * calibration.current_lsb as f64)
+            .expect("call calibrate() before reading accumulators");
+        let diagnostic_flags = self.take_diagnostic_flags()?;
+        let energy_raw = self.read_u40(Register::Energy)?;
+        let charge_raw = self.read_i40(Register::Charge)?;
+        Ok(AccumulatorSnapshot {
+            energy_joules: energy_raw as f64 * 16.0 * 3.2 * calibration.current_lsb as f64,
+            charge_coulombs: charge_raw as f64 * calibration.current_lsb as f64,
+            diagnostic_flags,
+        })
     }
 
     /// Returns die temperature in degrees Celsius.
@@ -429,14 +443,10 @@ impl<I2C: I2c> Ina228<I2C> {
         self.write_u16(Register::Config, config_value | config::RESET_ACCUMULATORS)
     }
 
-    /// Returns `true` if a new conversion result is available.
-    pub fn conversion_ready(&mut self) -> Result<bool, Error<I2C::Error>> {
-        let diag = self.read_u16(Register::DiagAlrt)?;
-        Ok(diag & diagnostic_alert::CONVERSION_READY != 0)
-    }
-
-    /// Reads all diagnostic and alert flags from the DIAG_ALRT register.
-    pub fn diagnostic_flags(&mut self) -> Result<DiagnosticFlags, Error<I2C::Error>> {
+    /// Takes all diagnostic and alert flags from the DIAG_ALRT register.
+    ///
+    /// This acknowledges conversion-ready and, in latched mode, threshold alert flags.
+    pub fn take_diagnostic_flags(&mut self) -> Result<DiagnosticFlags, Error<I2C::Error>> {
         let d = self.read_u16(Register::DiagAlrt)?;
         Ok(DiagnosticFlags {
             memory_ok: d & diagnostic_alert::MEMORY_OK != 0,

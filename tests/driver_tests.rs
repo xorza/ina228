@@ -371,11 +371,8 @@ fn calibration_required_operations_panic_before_i2c() {
     assert_panics_with("call calibrate() before reading power", || {
         let _ = ina.power();
     });
-    assert_panics_with("call calibrate() before reading energy", || {
-        let _ = ina.energy();
-    });
-    assert_panics_with("call calibrate() before reading charge", || {
-        let _ = ina.charge();
+    assert_panics_with("call calibrate() before reading accumulators", || {
+        let _ = ina.take_accumulator_snapshot();
     });
     assert_panics_with("call calibrate() before setting power limit", || {
         let _ = ina.set_power_limit(1.0);
@@ -489,70 +486,44 @@ fn power_read() {
 }
 
 #[test]
-fn energy_read() {
+fn accumulator_snapshot_reports_values_and_overflows() {
     let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
-    let current_lsb = (10.0_f32 / 524_288.0) as f64;
-
-    // Energy raw = energy_j / (16.0 * 3.2 * current_lsb)
-    let energy_j = 1000.0_f64;
-    let raw_40 = (energy_j / (16.0 * 3.2 * current_lsb)) as u64;
+    let diagnostic_bits: u16 = (1 << 11) | (1 << 10) | (1 << 1) | 1;
     let i2c = mock(&[
         write_txn(0x02, shunt_cal),
         read_txn(0x00, &0x0000_u16.to_be_bytes()),
         write_txn(0x00, 1 << 14),
-        read_txn(0x09, &u40_bytes(raw_40)),
+        read_txn(0x0B, &diagnostic_bits.to_be_bytes()),
+        read_txn(0x09, &u40_bytes(10_240)),
+        read_txn(0x0A, &u40_bytes(524_288)),
     ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     ina.calibrate(10.0, 0.01).unwrap();
-    let e = ina.energy().unwrap();
-    assert!((e - energy_j).abs() < 1.0, "expected ~{energy_j}J, got {e}");
+    let snapshot = ina.take_accumulator_snapshot().unwrap();
+    assert_eq!(snapshot.energy_joules, 10.0);
+    assert_eq!(snapshot.charge_coulombs, 10.0);
+    assert!(snapshot.diagnostic_flags.memory_ok);
+    assert!(snapshot.diagnostic_flags.conversion_ready);
+    assert!(snapshot.diagnostic_flags.energy_overflow);
+    assert!(snapshot.diagnostic_flags.charge_overflow);
     ina.release().done();
-}
 
-#[test]
-fn charge_positive() {
-    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
-    let current_lsb = (10.0_f32 / 524_288.0) as f64;
-
-    let charge_c = 100.0_f64;
-    let raw_40 = (charge_c / current_lsb) as u64;
+    let negative_charge_raw = ((-524_288_i64) as u64) & 0xFF_FFFF_FFFF;
     let i2c = mock(&[
         write_txn(0x02, shunt_cal),
         read_txn(0x00, &0x0000_u16.to_be_bytes()),
         write_txn(0x00, 1 << 14),
-        read_txn(0x0A, &u40_bytes(raw_40)),
+        read_txn(0x0B, &1_u16.to_be_bytes()),
+        read_txn(0x09, &u40_bytes(0)),
+        read_txn(0x0A, &u40_bytes(negative_charge_raw)),
     ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     ina.calibrate(10.0, 0.01).unwrap();
-    let c = ina.charge().unwrap();
-    assert!(
-        (c - charge_c).abs() < 0.01,
-        "expected ~{charge_c}C, got {c}"
-    );
-    ina.release().done();
-}
-
-#[test]
-fn charge_negative() {
-    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
-    let current_lsb = (10.0_f32 / 524_288.0) as f64;
-
-    let charge_c = -100.0_f64;
-    // Negative 40-bit: compute raw as signed then mask to 40 bits
-    let raw_40 = ((charge_c / current_lsb) as i64 as u64) & 0xFF_FFFF_FFFF;
-    let i2c = mock(&[
-        write_txn(0x02, shunt_cal),
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        write_txn(0x00, 1 << 14),
-        read_txn(0x0A, &u40_bytes(raw_40)),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(10.0, 0.01).unwrap();
-    let c = ina.charge().unwrap();
-    assert!(
-        (c - charge_c).abs() < 0.01,
-        "expected ~{charge_c}C, got {c}"
-    );
+    let snapshot = ina.take_accumulator_snapshot().unwrap();
+    assert_eq!(snapshot.energy_joules, 0.0);
+    assert_eq!(snapshot.charge_coulombs, -10.0);
+    assert!(!snapshot.diagnostic_flags.energy_overflow);
+    assert!(!snapshot.diagnostic_flags.charge_overflow);
     ina.release().done();
 }
 
@@ -633,22 +604,6 @@ fn reset_accumulators() {
 }
 
 #[test]
-fn conversion_ready_true() {
-    let i2c = mock(&[read_txn(0x0B, &(1_u16 << 1).to_be_bytes())]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert!(ina.conversion_ready().unwrap());
-    ina.release().done();
-}
-
-#[test]
-fn conversion_ready_false() {
-    let i2c = mock(&[read_txn(0x0B, &0x0000_u16.to_be_bytes())]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert!(!ina.conversion_ready().unwrap());
-    ina.release().done();
-}
-
-#[test]
 fn manufacturer_id() {
     let i2c = mock(&[read_txn(0x3E, &0x5449_u16.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
@@ -680,7 +635,7 @@ fn disable_temp_compensation() {
 fn diagnostic_flags_only_memory_ok() {
     let i2c = mock(&[read_txn(0x0B, &0x0001_u16.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    let flags = ina.diagnostic_flags().unwrap();
+    let flags = ina.take_diagnostic_flags().unwrap();
     assert!(flags.memory_ok);
     assert!(!flags.conversion_ready);
     assert!(!flags.energy_overflow);
@@ -701,7 +656,7 @@ fn diagnostic_flags_alerts_set() {
     let diag: u16 = (1 << 8) | (1 << 7) | (1 << 4) | (1 << 1);
     let i2c = mock(&[read_txn(0x0B, &diag.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    let flags = ina.diagnostic_flags().unwrap();
+    let flags = ina.take_diagnostic_flags().unwrap();
     assert!(!flags.memory_ok);
     assert!(flags.temp_over_limit);
     assert!(flags.bus_over_limit);
@@ -1147,7 +1102,7 @@ fn diagnostic_flags_overflow_and_under_limits() {
     let diag: u16 = (1 << 11) | (1 << 10) | (1 << 9) | (1 << 5) | (1 << 3) | 1;
     let i2c = mock(&[read_txn(0x0B, &diag.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    let flags = ina.diagnostic_flags().unwrap();
+    let flags = ina.take_diagnostic_flags().unwrap();
     assert!(flags.memory_ok);
     assert!(flags.energy_overflow);
     assert!(flags.math_overflow);
