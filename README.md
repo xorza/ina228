@@ -59,6 +59,8 @@ Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, po
 
 If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
 
+Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
+
 ## I2C Addresses
 
 The INA228 supports 16 addresses (0x40-0x4F) configured via A0 and A1 pins:
