@@ -76,27 +76,35 @@ struct Calibration {
 }
 
 impl Calibration {
+    const CURRENT_ADC_COUNTS: f32 = 524_288.0;
+    const POWER_LSB_MULTIPLIER: f64 = 3.2;
+
     fn shunt_cal(self, adc_range: AdcRange) -> Result<u16, ConfigurationError> {
-        let max_shunt_voltage =
-            self.current_lsb as f64 * 524_288.0 * self.shunt_resistance_ohm as f64;
-        let full_scale = match adc_range {
-            AdcRange::Range163mV => 0.16384,
-            AdcRange::Range40mV => 0.04096,
-        };
-        if !max_shunt_voltage.is_finite() || max_shunt_voltage > full_scale {
+        let max_shunt_voltage = self.current_lsb as f64
+            * Self::CURRENT_ADC_COUNTS as f64
+            * self.shunt_resistance_ohm as f64;
+        if !max_shunt_voltage.is_finite() || max_shunt_voltage > adc_range.full_scale_voltage() {
             return Err(ConfigurationError::Calibration);
         }
 
-        let mut shunt_cal = 13107.2e6 * self.current_lsb as f64 * self.shunt_resistance_ohm as f64;
-        if adc_range == AdcRange::Range40mV {
-            shunt_cal *= 4.0;
-        }
+        let shunt_cal = 13107.2e6
+            * self.current_lsb as f64
+            * self.shunt_resistance_ohm as f64
+            * adc_range.shunt_cal_multiplier();
 
         let shunt_cal = shunt_cal + 0.5;
         if !shunt_cal.is_finite() || !(1.0..32768.0).contains(&shunt_cal) {
             return Err(ConfigurationError::Calibration);
         }
         Ok(shunt_cal as u16)
+    }
+
+    fn power_lsb(self) -> f32 {
+        Self::POWER_LSB_MULTIPLIER as f32 * self.current_lsb
+    }
+
+    fn energy_lsb(self) -> f64 {
+        16.0 * Self::POWER_LSB_MULTIPLIER * self.current_lsb as f64
     }
 }
 
@@ -234,11 +242,7 @@ impl<I2C: I2c> Ina228<I2C> {
             Ok(value) => value,
             Err(error) => return Err(InitializationError::I2c { i2c, error }),
         };
-        let adc_range = if config_value & config::ADC_RANGE == 0 {
-            AdcRange::Range163mV
-        } else {
-            AdcRange::Range40mV
-        };
+        let adc_range = AdcRange::from_config(config_value);
         Ok(Self {
             i2c,
             address,
@@ -301,10 +305,7 @@ impl<I2C: I2c> Ina228<I2C> {
         self.write_u16(Register::Sovl, i16::MAX as u16)?;
         self.write_u16(Register::Suvl, i16::MIN as u16)?;
 
-        let value = match range {
-            AdcRange::Range163mV => config_value & !config::ADC_RANGE,
-            AdcRange::Range40mV => config_value | config::ADC_RANGE,
-        };
+        let value = range.apply_to_config(config_value);
         self.write_u16(Register::Config, value)?;
 
         self.adc_range = range;
@@ -344,7 +345,7 @@ impl<I2C: I2c> Ina228<I2C> {
         }
 
         let calibration = Calibration {
-            current_lsb: max_current_a / 524_288.0,
+            current_lsb: max_current_a / Calibration::CURRENT_ADC_COUNTS,
             shunt_resistance_ohm,
         };
         let shunt_cal = calibration
@@ -390,11 +391,7 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Returns shunt voltage in Volts. LSB depends on the configured ADC range.
     pub fn shunt_voltage(&mut self) -> Result<f32, Error<I2C::Error>> {
         let raw = self.read_i20(Register::Vshunt)?;
-        let lsb = match self.adc_range {
-            AdcRange::Range163mV => 312.5e-9,
-            AdcRange::Range40mV => 78.125e-9,
-        };
-        Ok(raw as f32 * lsb)
+        Ok(raw as f32 * self.adc_range.shunt_voltage_lsb())
     }
 
     /// Returns current in Amps. Requires prior [`calibrate`](Self::calibrate) call.
@@ -412,7 +409,7 @@ impl<I2C: I2c> Ina228<I2C> {
             .calibration
             .expect("call calibrate() before reading power");
         let raw = self.read_u24(Register::Power)?;
-        Ok(raw as f32 * 3.2 * calibration.current_lsb)
+        Ok(raw as f32 * calibration.power_lsb())
     }
 
     /// Takes an energy, charge, and diagnostic snapshot.
@@ -431,7 +428,7 @@ impl<I2C: I2c> Ina228<I2C> {
         let energy_raw = self.read_u40(Register::Energy)?;
         let charge_raw = self.read_i40(Register::Charge)?;
         Ok(AccumulatorSnapshot {
-            energy_joules: energy_raw as f64 * 16.0 * 3.2 * calibration.current_lsb as f64,
+            energy_joules: energy_raw as f64 * calibration.energy_lsb(),
             charge_coulombs: charge_raw as f64 * calibration.current_lsb as f64,
             diagnostic_flags,
         })
@@ -491,7 +488,7 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn set_shunt_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(
             voltage_v,
-            self.shunt_limit_lsb(),
+            self.adc_range.shunt_limit_lsb(),
             ConfigurationError::ShuntVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -505,7 +502,7 @@ impl<I2C: I2c> Ina228<I2C> {
     ) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(
             voltage_v,
-            self.shunt_limit_lsb(),
+            self.adc_range.shunt_limit_lsb(),
             ConfigurationError::ShuntVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -548,10 +545,9 @@ impl<I2C: I2c> Ina228<I2C> {
         let calibration = self
             .calibration
             .expect("call calibrate() before setting power limit");
-        let power_lsb = 3.2 * calibration.current_lsb;
         let raw = encode_unsigned(
             power_w,
-            256.0 * power_lsb,
+            256.0 * calibration.power_lsb(),
             u16::MAX,
             ConfigurationError::PowerLimit,
         )
@@ -579,13 +575,6 @@ impl<I2C: I2c> Ina228<I2C> {
         self.i2c
     }
 
-    fn shunt_limit_lsb(&self) -> f32 {
-        match self.adc_range {
-            AdcRange::Range163mV => 5.0e-6,
-            AdcRange::Range40mV => 1.25e-6,
-        }
-    }
-
     fn read_u16_from(i2c: &mut I2C, address: u8, reg: Register) -> Result<u16, I2C::Error> {
         let mut buf = [0u8; 2];
         i2c.write_read(address, &[reg as u8], &mut buf)?;
@@ -604,9 +593,10 @@ impl<I2C: I2c> Ina228<I2C> {
     }
 
     fn read_u24(&mut self, reg: Register) -> Result<u32, Error<I2C::Error>> {
-        let mut buf = [0u8; 3];
-        self.i2c.write_read(self.address, &[reg as u8], &mut buf)?;
-        Ok(((buf[0] as u32) << 16) | ((buf[1] as u32) << 8) | (buf[2] as u32))
+        let mut bytes = [0u8; 4];
+        self.i2c
+            .write_read(self.address, &[reg as u8], &mut bytes[1..])?;
+        Ok(u32::from_be_bytes(bytes))
     }
 
     fn read_i20(&mut self, reg: Register) -> Result<i32, Error<I2C::Error>> {
@@ -615,13 +605,10 @@ impl<I2C: I2c> Ina228<I2C> {
     }
 
     fn read_u40(&mut self, reg: Register) -> Result<u64, Error<I2C::Error>> {
-        let mut buf = [0u8; 5];
-        self.i2c.write_read(self.address, &[reg as u8], &mut buf)?;
-        Ok(((buf[0] as u64) << 32)
-            | ((buf[1] as u64) << 24)
-            | ((buf[2] as u64) << 16)
-            | ((buf[3] as u64) << 8)
-            | (buf[4] as u64))
+        let mut bytes = [0u8; 8];
+        self.i2c
+            .write_read(self.address, &[reg as u8], &mut bytes[3..])?;
+        Ok(u64::from_be_bytes(bytes))
     }
 
     fn read_i40(&mut self, reg: Register) -> Result<i64, Error<I2C::Error>> {

@@ -62,6 +62,51 @@ pub enum AdcRange {
     Range40mV = 1,
 }
 
+impl AdcRange {
+    pub(crate) fn from_config(value: u16) -> Self {
+        if value & config::ADC_RANGE == 0 {
+            Self::Range163mV
+        } else {
+            Self::Range40mV
+        }
+    }
+
+    pub(crate) fn apply_to_config(self, value: u16) -> u16 {
+        match self {
+            Self::Range163mV => value & !config::ADC_RANGE,
+            Self::Range40mV => value | config::ADC_RANGE,
+        }
+    }
+
+    pub(crate) fn full_scale_voltage(self) -> f64 {
+        match self {
+            Self::Range163mV => 0.16384,
+            Self::Range40mV => 0.04096,
+        }
+    }
+
+    pub(crate) fn shunt_voltage_lsb(self) -> f32 {
+        match self {
+            Self::Range163mV => 312.5e-9,
+            Self::Range40mV => 78.125e-9,
+        }
+    }
+
+    pub(crate) fn shunt_limit_lsb(self) -> f32 {
+        match self {
+            Self::Range163mV => 5.0e-6,
+            Self::Range40mV => 1.25e-6,
+        }
+    }
+
+    pub(crate) fn shunt_cal_multiplier(self) -> f64 {
+        match self {
+            Self::Range163mV => 1.0,
+            Self::Range40mV => 4.0,
+        }
+    }
+}
+
 /// ADC conversion time per sample.
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
