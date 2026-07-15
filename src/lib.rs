@@ -3,7 +3,7 @@
 mod registers;
 
 use embedded_hal::i2c::I2c;
-use registers::Register;
+use registers::{Register, diagnostic_alert};
 
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
@@ -47,9 +47,10 @@ pub struct AlertConfig {
 }
 
 /// Status flags from the DIAG_ALRT register.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct DiagnosticFlags {
-    pub memory_status: bool,
+    /// `true` when the device trim memory checksum is valid.
+    pub memory_ok: bool,
     pub conversion_ready: bool,
     pub energy_overflow: bool,
     pub math_overflow: bool,
@@ -247,43 +248,41 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Returns `true` if a new conversion result is available.
     pub fn conversion_ready(&mut self) -> Result<bool, I2C::Error> {
         let diag = self.read_u16(Register::DiagAlrt)?;
-        Ok(diag & (1 << 1) != 0)
+        Ok(diag & diagnostic_alert::CONVERSION_READY != 0)
     }
 
     /// Reads all diagnostic and alert flags from the DIAG_ALRT register.
     pub fn diagnostic_flags(&mut self) -> Result<DiagnosticFlags, I2C::Error> {
         let d = self.read_u16(Register::DiagAlrt)?;
         Ok(DiagnosticFlags {
-            memory_status: d & (1 << 15) != 0,
-            conversion_ready: d & (1 << 1) != 0,
-            energy_overflow: d & (1 << 9) != 0,
-            math_overflow: d & (1 << 8) != 0,
-            temp_over_limit: d & (1 << 7) != 0,
-            shunt_over_limit: d & (1 << 6) != 0,
-            shunt_under_limit: d & (1 << 5) != 0,
-            bus_over_limit: d & (1 << 4) != 0,
-            bus_under_limit: d & (1 << 3) != 0,
-            power_over_limit: d & (1 << 2) != 0,
-            charge_overflow: d & (1 << 0) != 0,
+            memory_ok: d & diagnostic_alert::MEMORY_OK != 0,
+            conversion_ready: d & diagnostic_alert::CONVERSION_READY != 0,
+            energy_overflow: d & diagnostic_alert::ENERGY_OVERFLOW != 0,
+            math_overflow: d & diagnostic_alert::MATH_OVERFLOW != 0,
+            temp_over_limit: d & diagnostic_alert::TEMP_OVER_LIMIT != 0,
+            shunt_over_limit: d & diagnostic_alert::SHUNT_OVER_LIMIT != 0,
+            shunt_under_limit: d & diagnostic_alert::SHUNT_UNDER_LIMIT != 0,
+            bus_over_limit: d & diagnostic_alert::BUS_OVER_LIMIT != 0,
+            bus_under_limit: d & diagnostic_alert::BUS_UNDER_LIMIT != 0,
+            power_over_limit: d & diagnostic_alert::POWER_OVER_LIMIT != 0,
+            charge_overflow: d & diagnostic_alert::CHARGE_OVERFLOW != 0,
         })
     }
 
-    /// Configures alert pin behavior (DIAG_ALRT upper bits). Preserves the lower
-    /// 10 status-flag bits.
+    /// Configures alert pin behavior. Writing DIAG_ALRT acknowledges latched alerts.
     pub fn configure_alerts(&mut self, cfg: AlertConfig) -> Result<(), I2C::Error> {
-        let diag = self.read_u16(Register::DiagAlrt)?;
-        let mut value = diag & 0x03FF;
+        let mut value = 0;
+        if cfg.latch {
+            value |= diagnostic_alert::LATCH;
+        }
         if cfg.conversion_ready {
-            value |= 1 << 14;
+            value |= diagnostic_alert::CONVERSION_READY_ENABLE;
         }
         if cfg.slow_alert {
-            value |= 1 << 13;
+            value |= diagnostic_alert::SLOW_ALERT;
         }
         if cfg.active_high {
-            value |= 1 << 12;
-        }
-        if cfg.latch {
-            value |= 1 << 11;
+            value |= diagnostic_alert::ACTIVE_HIGH;
         }
         self.write_u16(Register::DiagAlrt, value)
     }

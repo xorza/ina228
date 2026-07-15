@@ -23,6 +23,24 @@ pub enum Register {
     DeviceId = 0x3F,
 }
 
+pub(crate) mod diagnostic_alert {
+    pub(crate) const LATCH: u16 = 1 << 15;
+    pub(crate) const CONVERSION_READY_ENABLE: u16 = 1 << 14;
+    pub(crate) const SLOW_ALERT: u16 = 1 << 13;
+    pub(crate) const ACTIVE_HIGH: u16 = 1 << 12;
+    pub(crate) const ENERGY_OVERFLOW: u16 = 1 << 11;
+    pub(crate) const CHARGE_OVERFLOW: u16 = 1 << 10;
+    pub(crate) const MATH_OVERFLOW: u16 = 1 << 9;
+    pub(crate) const TEMP_OVER_LIMIT: u16 = 1 << 7;
+    pub(crate) const SHUNT_OVER_LIMIT: u16 = 1 << 6;
+    pub(crate) const SHUNT_UNDER_LIMIT: u16 = 1 << 5;
+    pub(crate) const BUS_OVER_LIMIT: u16 = 1 << 4;
+    pub(crate) const BUS_UNDER_LIMIT: u16 = 1 << 3;
+    pub(crate) const POWER_OVER_LIMIT: u16 = 1 << 2;
+    pub(crate) const CONVERSION_READY: u16 = 1 << 1;
+    pub(crate) const MEMORY_OK: u16 = 1;
+}
+
 /// Shunt ADC full-scale range selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdcRange {

@@ -432,76 +432,87 @@ fn disable_temp_compensation() {
 }
 
 #[test]
-fn diagnostic_flags_all_clear() {
-    let i2c = Mock::new(&[read_txn(0x0B, &0x0000_u16.to_be_bytes())]);
+fn diagnostic_flags_only_memory_ok() {
+    let i2c = Mock::new(&[read_txn(0x0B, &0x0001_u16.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR);
     let flags = ina.diagnostic_flags().unwrap();
+    assert!(flags.memory_ok);
     assert!(!flags.conversion_ready);
+    assert!(!flags.energy_overflow);
+    assert!(!flags.math_overflow);
     assert!(!flags.temp_over_limit);
     assert!(!flags.shunt_over_limit);
+    assert!(!flags.shunt_under_limit);
     assert!(!flags.bus_over_limit);
+    assert!(!flags.bus_under_limit);
     assert!(!flags.power_over_limit);
+    assert!(!flags.charge_overflow);
     ina.release().done();
 }
 
 #[test]
 fn diagnostic_flags_alerts_set() {
-    // Set TMPOL(7), BUSOL(4), CNVRF(1)
-    let diag: u16 = (1 << 7) | (1 << 4) | (1 << 1);
+    // Set reserved bit 8 alongside TMPOL(7), BUSOL(4), and CNVRF(1).
+    let diag: u16 = (1 << 8) | (1 << 7) | (1 << 4) | (1 << 1);
     let i2c = Mock::new(&[read_txn(0x0B, &diag.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR);
     let flags = ina.diagnostic_flags().unwrap();
+    assert!(!flags.memory_ok);
     assert!(flags.temp_over_limit);
     assert!(flags.bus_over_limit);
     assert!(flags.conversion_ready);
+    assert!(!flags.energy_overflow);
+    assert!(!flags.math_overflow);
     assert!(!flags.shunt_over_limit);
+    assert!(!flags.shunt_under_limit);
+    assert!(!flags.bus_under_limit);
     assert!(!flags.power_over_limit);
+    assert!(!flags.charge_overflow);
     ina.release().done();
 }
 
 #[test]
-fn configure_alerts_latch_active_high() {
-    let i2c = Mock::new(&[
-        read_txn(0x0B, &0x0000_u16.to_be_bytes()),
-        // CNVR(14) | APOL(12) | ALATCH(11) = 0x5800
-        write_txn(0x0B, (1 << 14) | (1 << 12) | (1 << 11)),
-    ]);
+fn configure_alerts_encodes_each_control_bit() {
+    let cases = [
+        (AlertConfig::default(), 0),
+        (
+            AlertConfig {
+                latch: true,
+                ..Default::default()
+            },
+            1 << 15,
+        ),
+        (
+            AlertConfig {
+                conversion_ready: true,
+                ..Default::default()
+            },
+            1 << 14,
+        ),
+        (
+            AlertConfig {
+                slow_alert: true,
+                ..Default::default()
+            },
+            1 << 13,
+        ),
+        (
+            AlertConfig {
+                active_high: true,
+                ..Default::default()
+            },
+            1 << 12,
+        ),
+    ];
+    let transactions: Vec<_> = cases
+        .iter()
+        .map(|(_, value)| write_txn(0x0B, *value))
+        .collect();
+    let i2c = Mock::new(&transactions);
     let mut ina = Ina228::new(i2c, ADDR);
-    ina.configure_alerts(AlertConfig {
-        latch: true,
-        active_high: true,
-        conversion_ready: true,
-        slow_alert: false,
-    })
-    .unwrap();
-    ina.release().done();
-}
-
-#[test]
-fn configure_alerts_default_clears_upper_bits() {
-    // Pre-existing upper bits must be cleared; lower 10 flag bits preserved.
-    let prior: u16 = 0xFFFF;
-    let i2c = Mock::new(&[
-        read_txn(0x0B, &prior.to_be_bytes()),
-        write_txn(0x0B, prior & 0x03FF),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR);
-    ina.configure_alerts(AlertConfig::default()).unwrap();
-    ina.release().done();
-}
-
-#[test]
-fn configure_alerts_slow_alert() {
-    let i2c = Mock::new(&[
-        read_txn(0x0B, &0x0000_u16.to_be_bytes()),
-        write_txn(0x0B, 1 << 13),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR);
-    ina.configure_alerts(AlertConfig {
-        slow_alert: true,
-        ..Default::default()
-    })
-    .unwrap();
+    for (config, _) in cases {
+        ina.configure_alerts(config).unwrap();
+    }
     ina.release().done();
 }
 
@@ -666,12 +677,12 @@ fn calibrate_rollback_on_i2c_error() {
 
 #[test]
 fn diagnostic_flags_overflow_and_under_limits() {
-    // MEMSTAT(15), ENERGYOF(9), MATHOF(8), SHUNTUL(5), BUSUL(3), CHARGEOF(0)
-    let diag: u16 = (1 << 15) | (1 << 9) | (1 << 8) | (1 << 5) | (1 << 3) | (1 << 0);
+    // Set ENERGYOF(11), CHARGEOF(10), MATHOF(9), SHUNTUL(5), BUSUL(3), MEMSTAT(0).
+    let diag: u16 = (1 << 11) | (1 << 10) | (1 << 9) | (1 << 5) | (1 << 3) | 1;
     let i2c = Mock::new(&[read_txn(0x0B, &diag.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR);
     let flags = ina.diagnostic_flags().unwrap();
-    assert!(flags.memory_status);
+    assert!(flags.memory_ok);
     assert!(flags.energy_overflow);
     assert!(flags.math_overflow);
     assert!(flags.shunt_under_limit);
@@ -696,4 +707,3 @@ fn set_temp_compensation_masks_to_14_bits() {
     ina.set_temp_compensation(0xFFFF).unwrap();
     ina.release().done();
 }
-

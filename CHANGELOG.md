@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Changed
+- Renamed `DiagnosticFlags::memory_status` to `memory_ok` and removed its `Default` implementation.
+- `configure_alerts()` now writes DIAG_ALRT directly; configuring alerts acknowledges any latched alert flags.
+
+### Fixed
+- Corrected the DIAG_ALRT bit mapping for alert latching, memory status, energy and charge overflow, and math overflow.
+
 ## 0.2.0 - 2026-04-27
 
 ### Changed
