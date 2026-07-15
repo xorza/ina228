@@ -18,7 +18,8 @@ opt-level = "z"
 [dependencies]
 ina228 = { path = "../.." }
 embedded-hal = "1.0"
-esp-idf-sys = "0.37.2"
+esp-idf-hal = "0.46"
+esp-idf-sys = "0.37"
 
 [build-dependencies]
 embuild = "0.33"
