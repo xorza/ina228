@@ -9,6 +9,7 @@ const ADDR: u8 = DEFAULT_ADDRESS;
 const DEFAULT_ADC_CONFIG: u16 = 0xFB68;
 const SHUTDOWN_ADC_CONFIG: u16 = 0x0B68;
 const SHUTDOWN_ALT_ADC_CONFIG: u16 = 0x8B68;
+const ADC_MODE_MASK: u16 = 0xF000;
 
 /// Compute SHUNT_CAL the same way the driver does (f32 current_lsb, then f64 multiply).
 fn expected_shunt_cal(max_current: f32, shunt_ohm: f32, adc_range_40mv: bool) -> u16 {
@@ -48,6 +49,22 @@ fn active_calibration_txns(shunt_cal: u16, config: u16) -> [Transaction; 6] {
         read_txn(0x00, &config.to_be_bytes()),
         write_txn(0x00, config | (1 << 14)),
         write_txn(0x01, DEFAULT_ADC_CONFIG),
+    ]
+}
+
+fn continuous_snapshot_txns(
+    adc_config: u16,
+    diagnostic: u16,
+    energy: u64,
+    charge: u64,
+) -> [Transaction; 6] {
+    [
+        read_txn(0x01, &adc_config.to_be_bytes()),
+        write_txn(0x01, adc_config & !ADC_MODE_MASK),
+        read_txn(0x0B, &diagnostic.to_be_bytes()),
+        read_txn(0x09, &u40_bytes(energy)),
+        read_txn(0x0A, &u40_bytes(charge)),
+        write_txn(0x01, adc_config),
     ]
 }
 
@@ -498,11 +515,12 @@ fn accumulator_snapshot_reports_values_and_overflows() {
     let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
     let diagnostic_bits: u16 = (1 << 11) | (1 << 10) | (1 << 1) | 1;
     let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
-    transactions.extend([
-        read_txn(0x0B, &diagnostic_bits.to_be_bytes()),
-        read_txn(0x09, &u40_bytes(10_240)),
-        read_txn(0x0A, &u40_bytes(524_288)),
-    ]);
+    transactions.extend(continuous_snapshot_txns(
+        DEFAULT_ADC_CONFIG,
+        diagnostic_bits,
+        10_240,
+        524_288,
+    ));
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     ina.calibrate(10.0, 0.01).unwrap();
@@ -517,11 +535,12 @@ fn accumulator_snapshot_reports_values_and_overflows() {
 
     let negative_charge_raw = ((-524_288_i64) as u64) & 0xFF_FFFF_FFFF;
     let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
-    transactions.extend([
-        read_txn(0x0B, &1_u16.to_be_bytes()),
-        read_txn(0x09, &u40_bytes(0)),
-        read_txn(0x0A, &u40_bytes(negative_charge_raw)),
-    ]);
+    transactions.extend(continuous_snapshot_txns(
+        DEFAULT_ADC_CONFIG,
+        1,
+        0,
+        negative_charge_raw,
+    ));
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     ina.calibrate(10.0, 0.01).unwrap();
@@ -530,6 +549,85 @@ fn accumulator_snapshot_reports_values_and_overflows() {
     assert_eq!(snapshot.charge_coulombs, -10.0);
     assert!(!snapshot.diagnostic_flags.energy_overflow);
     assert!(!snapshot.diagnostic_flags.charge_overflow);
+    ina.release().done();
+}
+
+#[test]
+fn accumulator_snapshot_requires_continuous_mode() {
+    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
+
+    for mode in 0_u16..=15 {
+        let adc_config = (mode << 12) | SHUTDOWN_ADC_CONFIG;
+        let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
+        if mode >= 9 {
+            transactions.extend(continuous_snapshot_txns(adc_config, 1, 0, 0));
+        } else {
+            transactions.push(read_txn(0x01, &adc_config.to_be_bytes()));
+        }
+        let i2c = mock(&transactions);
+        let mut ina = Ina228::new(i2c, ADDR).unwrap();
+        ina.calibrate(10.0, 0.01).unwrap();
+
+        let result = ina.take_accumulator_snapshot();
+        if mode >= 9 {
+            let snapshot = result.unwrap();
+            assert_eq!(snapshot.energy_joules, 0.0);
+            assert_eq!(snapshot.charge_coulombs, 0.0);
+            assert!(snapshot.diagnostic_flags.memory_ok);
+        } else {
+            assert!(matches!(
+                result,
+                Err(DriverError::InvalidConfiguration(
+                    ConfigurationError::AccumulatorMode
+                ))
+            ));
+        }
+        ina.release().done();
+    }
+}
+
+#[test]
+fn accumulator_snapshot_failures_leave_conversions_suspended() {
+    let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
+    let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
+    transactions.extend([
+        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
+        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
+        read_txn(0x0B, &[0, 0]).with_error(ErrorKind::Bus),
+        write_txn(0x01, DEFAULT_ADC_CONFIG),
+    ]);
+    let i2c = mock(&transactions);
+    let mut ina = Ina228::new(i2c, ADDR).unwrap();
+    ina.calibrate(10.0, 0.01).unwrap();
+
+    assert!(matches!(
+        ina.take_accumulator_snapshot(),
+        Err(DriverError::I2c(ErrorKind::Bus))
+    ));
+    ina.configure(AdcConfig::default()).unwrap();
+    ina.release().done();
+
+    let failed_restore =
+        Transaction::write(ADDR, vec![0x01, 0xFB, 0x68]).with_error(ErrorKind::Bus);
+    let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
+    transactions.extend([
+        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
+        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
+        read_txn(0x0B, &1_u16.to_be_bytes()),
+        read_txn(0x09, &u40_bytes(0)),
+        read_txn(0x0A, &u40_bytes(0)),
+        failed_restore,
+        write_txn(0x01, DEFAULT_ADC_CONFIG),
+    ]);
+    let i2c = mock(&transactions);
+    let mut ina = Ina228::new(i2c, ADDR).unwrap();
+    ina.calibrate(10.0, 0.01).unwrap();
+
+    assert!(matches!(
+        ina.take_accumulator_snapshot(),
+        Err(DriverError::I2c(ErrorKind::Bus))
+    ));
+    ina.configure(AdcConfig::default()).unwrap();
     ina.release().done();
 }
 

@@ -33,6 +33,8 @@ pub enum ConfigurationError {
     TemperatureLimit,
     /// Power threshold cannot be represented by its unsigned register.
     PowerLimit,
+    /// Energy and charge accumulators are invalid outside continuous conversion modes.
+    AccumulatorMode,
 }
 
 /// INA228 operation error.
@@ -223,7 +225,8 @@ pub struct DiagnosticFlags {
     pub charge_overflow: bool,
 }
 
-/// Energy, charge, and diagnostic state captured by [`Ina228::take_accumulator_snapshot`].
+/// Coherent energy, charge, and diagnostic state captured by
+/// [`Ina228::take_accumulator_snapshot`].
 #[derive(Debug, Clone, Copy)]
 pub struct AccumulatorSnapshot {
     pub energy_joules: f64,
@@ -432,26 +435,40 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f32 * calibration.power_lsb())
     }
 
-    /// Takes an energy, charge, and diagnostic snapshot.
+    /// Takes a coherent energy, charge, and diagnostic snapshot.
+    ///
+    /// Accumulators are valid only in continuous conversion modes. Conversions are
+    /// suspended during the capture so DIAG_ALRT, ENERGY, and CHARGE cannot change
+    /// between transactions, then the previous ADC configuration is restored. The
+    /// suspension creates a brief gap during which energy and charge are not accumulated.
     ///
     /// Reading DIAG_ALRT acknowledges conversion-ready and any latched threshold alerts.
-    /// Reading ENERGY and CHARGE then clears their respective overflow indicators. The
-    /// returned diagnostic flags contain the overflow state captured before those reads.
-    ///
-    /// If a later I2C transaction fails, earlier acknowledgement and clear-on-read side
-    /// effects may already have occurred.
+    /// Reading ENERGY and CHARGE clears their respective overflow indicators. If an I2C
+    /// operation fails after suspension, the ADC remains in shutdown mode and earlier
+    /// acknowledgement or clear-on-read effects may already have occurred. Use
+    /// [`configure`](Self::configure) to resume conversions after an error.
     pub fn take_accumulator_snapshot(&mut self) -> Result<AccumulatorSnapshot, Error<I2C::Error>> {
         let calibration = self
             .calibration
             .expect("call calibrate() before reading accumulators");
+        let adc_config = self.read_u16(Register::AdcConfig)?;
+        let mode = adc_config & adc_config::MODE_MASK;
+        if mode < adc_config::FIRST_CONTINUOUS_MODE {
+            return Err(Error::InvalidConfiguration(
+                ConfigurationError::AccumulatorMode,
+            ));
+        }
+        let suspended = self.suspend_captured_conversions(adc_config)?;
         let diagnostic_flags = self.take_diagnostic_flags()?;
         let energy_raw = self.read_u40(Register::Energy)?;
         let charge_raw = self.read_i40(Register::Charge)?;
-        Ok(AccumulatorSnapshot {
+        let snapshot = AccumulatorSnapshot {
             energy_joules: energy_raw as f64 * calibration.energy_lsb(),
             charge_coulombs: charge_raw as f64 * calibration.current_lsb as f64,
             diagnostic_flags,
-        })
+        };
+        self.restore_conversions(suspended)?;
+        Ok(snapshot)
     }
 
     /// Returns die temperature in degrees Celsius.
@@ -597,6 +614,13 @@ impl<I2C: I2c> Ina228<I2C> {
 
     fn suspend_conversions(&mut self) -> Result<SuspendedConversions, Error<I2C::Error>> {
         let adc_config = self.read_u16(Register::AdcConfig)?;
+        self.suspend_captured_conversions(adc_config)
+    }
+
+    fn suspend_captured_conversions(
+        &mut self,
+        adc_config: u16,
+    ) -> Result<SuspendedConversions, Error<I2C::Error>> {
         let mode = adc_config & adc_config::MODE_MASK;
         let resume = mode != 0 && mode != adc_config::ALTERNATE_SHUTDOWN_MODE;
         if resume {

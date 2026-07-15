@@ -69,9 +69,11 @@ If you change the ADC range via `set_adc_range()` after calling `calibrate()`, t
 
 An I2C failure during calibration, range, or temperature-compensation changes after conversions are suspended leaves the ADC in shutdown mode. A range failure may also have disabled one or both shunt alerts. Call `configure()` to resume conversions. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
 
-`take_diagnostic_flags()` reads and acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` returns energy, charge, and the complete diagnostic snapshot captured before reading ENERGY and CHARGE clears their overflow indicators.
+`take_diagnostic_flags()` reads and acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` is available only in continuous conversion modes, where TI defines ENERGY and CHARGE as valid. It briefly suspends conversions so DIAG_ALRT, ENERGY, and CHARGE form a coherent snapshot, creating a short gap during which no energy or charge is accumulated. Restoring the continuous mode starts a fresh conversion and clears the device's conversion-ready flag; the returned snapshot retains the status captured before suspension.
 
-Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
+If an accumulator snapshot fails after suspension, the ADC remains in shutdown mode and earlier clear-on-read effects may already have occurred. Call `configure()` to resume conversions.
+
+Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values and accumulator reads outside continuous mode return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
 
 Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. `Ina228::new()` rejects addresses outside `0x40..=0x4F` with `InitializationError::InvalidAddress` and reports CONFIG read failures with `InitializationError::I2c`. Both variants return ownership of the I2C bus so the caller can recover the peripheral or retry initialization.
 

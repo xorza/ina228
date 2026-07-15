@@ -10,6 +10,7 @@
 - **Breaking:** ADC range changes now suspend conversions and disable the range-dependent shunt alert thresholds before updating CONFIG and SHUNT_CAL.
 - **Breaking:** Replaced `conversion_ready()` and `diagnostic_flags()` with the explicit `take_diagnostic_flags()` acknowledgement operation.
 - **Breaking:** Replaced separate `energy()` and `charge()` reads with `take_accumulator_snapshot()`, which returns both values and their pre-read diagnostic state in `AccumulatorSnapshot`.
+- **Breaking:** `take_accumulator_snapshot()` now returns `ConfigurationError::AccumulatorMode` outside continuous conversion modes and briefly suspends conversion for a coherent capture.
 - **Breaking:** Fallible methods now return `Error<I2C::Error>`, distinguishing I2C failures from `ConfigurationError` values.
 - Physical-unit setters round to the nearest register value instead of truncating.
 
@@ -24,6 +25,7 @@
 - Calibration and temperature-compensation changes now suspend conversions and restart active modes, clearing stale conversion-ready state before new-scale results are consumed.
 - Both ADC_CONFIG shutdown encodings are preserved across calibration, range, and temperature-compensation changes.
 - Diagnostic and accumulator reads no longer discard clear-on-read status without returning the captured flags.
+- Accumulator snapshots no longer race continuous updates between DIAG_ALRT, ENERGY, and CHARGE reads.
 
 ## 0.2.0 - 2026-04-27
 
