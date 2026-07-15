@@ -71,7 +71,7 @@ An I2C failure after conversions are suspended leaves the ADC in shutdown mode a
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
 
-Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. On failure, `Ina228::new()` returns an `InitializationError` containing both the underlying I2C error and the I2C bus, allowing the caller to recover the peripheral or retry initialization.
+Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. `Ina228::new()` rejects addresses outside `0x40..=0x4F` with `InitializationError::InvalidAddress` and reports CONFIG read failures with `InitializationError::I2c`. Both variants return ownership of the I2C bus so the caller can recover the peripheral or retry initialization.
 
 `AdcConfig::default()` matches the datasheet ADC_CONFIG reset value: continuous conversion of all channels, 1052 µs conversion times, and one-sample averaging.
 

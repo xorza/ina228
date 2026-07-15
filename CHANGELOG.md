@@ -1,7 +1,7 @@
 ## Unreleased
 
 ### Changed
-- **Breaking:** `Ina228::new()` now reads CONFIG to synchronize the active ADC range and returns `Result<Self, InitializationError<I2C>>`; initialization failures return ownership of the I2C bus.
+- **Breaking:** `Ina228::new()` now reads CONFIG to synchronize the active ADC range and returns `Result<Self, InitializationError<I2C>>`; both invalid addresses and CONFIG-read failures return ownership of the I2C bus.
 - **Breaking:** `configure()` now accepts an `AdcConfig` struct with named fields instead of five positional parameters.
 - `AdcConfig::default()` matches the datasheet ADC_CONFIG reset value.
 - Renamed `DiagnosticFlags::memory_status` to `memory_ok` and removed its `Default` implementation.

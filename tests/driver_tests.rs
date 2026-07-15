@@ -2,7 +2,7 @@ use embedded_hal::i2c::ErrorKind;
 use embedded_hal_mock::eh1::i2c::{Mock, Transaction};
 use ina228::{
     AdcConfig, AdcRange, AlertConfig, AveragingCount, ConfigurationError, ConversionTime,
-    DEFAULT_ADDRESS, Error as DriverError, Ina228, OperatingMode,
+    DEFAULT_ADDRESS, Error as DriverError, Ina228, InitializationError, OperatingMode,
 };
 
 const ADDR: u8 = DEFAULT_ADDRESS;
@@ -93,27 +93,36 @@ fn new_returns_i2c_with_config_read_error() {
     let i2c = Mock::new(&[
         Transaction::write_read(ADDR, vec![0x00], vec![0x00, 0x00]).with_error(ErrorKind::Bus)
     ]);
-    let initialization_error = match Ina228::new(i2c, ADDR) {
+    match Ina228::new(i2c, ADDR) {
         Ok(_) => panic!("expected CONFIG read to fail"),
-        Err(error) => error,
-    };
-    assert_eq!(initialization_error.error, ErrorKind::Bus);
-    let mut i2c = initialization_error.i2c;
-    i2c.done();
+        Err(InitializationError::InvalidAddress { address, .. }) => {
+            panic!("expected I2C error, got invalid address {address:#04X}")
+        }
+        Err(InitializationError::I2c { mut i2c, error }) => {
+            assert_eq!(error, ErrorKind::Bus);
+            i2c.done();
+        }
+    }
 }
 
 #[test]
-#[should_panic(expected = "INA228 address must be in 0x40..=0x4F")]
-fn new_invalid_address_low() {
-    let i2c = Mock::new(&[]);
-    let _ = Ina228::new(i2c, 0x39);
-}
-
-#[test]
-#[should_panic(expected = "INA228 address must be in 0x40..=0x4F")]
-fn new_invalid_address_high() {
-    let i2c = Mock::new(&[]);
-    let _ = Ina228::new(i2c, 0x50);
+fn new_returns_i2c_with_invalid_address() {
+    for address in [0x00, 0x3F, 0x50, u8::MAX] {
+        let i2c = Mock::new(&[]);
+        match Ina228::new(i2c, address) {
+            Ok(_) => panic!("expected address {address:#04X} to be rejected"),
+            Err(InitializationError::InvalidAddress {
+                mut i2c,
+                address: returned_address,
+            }) => {
+                assert_eq!(returned_address, address);
+                i2c.done();
+            }
+            Err(InitializationError::I2c { .. }) => {
+                panic!("invalid address {address:#04X} attempted an I2C transaction")
+            }
+        }
+    }
 }
 
 #[test]

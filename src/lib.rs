@@ -50,13 +50,23 @@ impl<E> From<E> for Error<E> {
     }
 }
 
-/// CONFIG-read failure returned while constructing an [`Ina228`].
+/// Failure returned while constructing an [`Ina228`].
 #[derive(Debug)]
-pub struct InitializationError<I2C: I2c> {
-    /// I2C bus returned to the caller for recovery or retry.
-    pub i2c: I2C,
-    /// Error reported by the I2C bus.
-    pub error: I2C::Error,
+pub enum InitializationError<I2C: I2c> {
+    /// The supplied address is outside the INA228 address range.
+    InvalidAddress {
+        /// I2C bus returned to the caller for recovery or retry.
+        i2c: I2C,
+        /// Invalid address supplied by the caller.
+        address: u8,
+    },
+    /// Reading CONFIG from the device failed.
+    I2c {
+        /// I2C bus returned to the caller for recovery or retry.
+        i2c: I2C,
+        /// Error reported by the I2C bus.
+        error: I2C::Error,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,20 +223,16 @@ impl<I2C: I2c> Ina228<I2C> {
     ///
     /// # Errors
     ///
-    /// Returns an [`InitializationError`] containing the I2C bus if CONFIG cannot be read.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `address` is not in `0x40..=0x4F`.
+    /// Returns an [`InitializationError`] containing the I2C bus if `address` is outside
+    /// `0x40..=0x4F` or CONFIG cannot be read.
     pub fn new(i2c: I2C, address: u8) -> Result<Self, InitializationError<I2C>> {
-        assert!(
-            (0x40..=0x4F).contains(&address),
-            "INA228 address must be in 0x40..=0x4F"
-        );
+        if !(0x40..=0x4F).contains(&address) {
+            return Err(InitializationError::InvalidAddress { i2c, address });
+        }
         let mut i2c = i2c;
         let config_value = match Self::read_u16_from(&mut i2c, address, Register::Config) {
             Ok(value) => value,
-            Err(error) => return Err(InitializationError { i2c, error }),
+            Err(error) => return Err(InitializationError::I2c { i2c, error }),
         };
         let adc_range = if config_value & config::ADC_RANGE == 0 {
             AdcRange::Range163mV
