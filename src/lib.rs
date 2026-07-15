@@ -202,6 +202,12 @@ pub struct DiagnosticFlags {
 impl<I2C: I2c> Ina228<I2C> {
     /// Creates a driver and reads CONFIG to synchronize the ADC range.
     ///
+    /// # Errors
+    ///
+    /// Returns an [`InitializationError`] containing the I2C bus if CONFIG cannot be read.
+    ///
+    /// # Panics
+    ///
     /// Panics if `address` is not in `0x40..=0x4F`.
     pub fn new(i2c: I2C, address: u8) -> Result<Self, InitializationError<I2C>> {
         assert!(
@@ -529,8 +535,6 @@ impl<I2C: I2c> Ina228<I2C> {
             AdcRange::Range40mV => 1.25e-6,
         }
     }
-
-    // --- I2C helpers ---
 
     fn read_u16_from(i2c: &mut I2C, address: u8, reg: Register) -> Result<u16, I2C::Error> {
         let mut buf = [0u8; 2];
