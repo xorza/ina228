@@ -46,6 +46,8 @@ pub enum Error<E> {
     InvalidConfiguration(ConfigurationError),
     /// The ADC range is unknown after an ambiguous RESET or ADCRANGE write failure.
     AdcRangeUnknown,
+    /// VSHUNT was produced before the current ADC range became active.
+    ShuntVoltageStale,
 }
 
 impl<E> From<E> for Error<E> {
@@ -93,7 +95,7 @@ impl Calibration {
         let max_shunt_voltage = self.current_lsb as f64
             * Self::CURRENT_ADC_COUNTS as f64
             * self.shunt_resistance_ohm as f64;
-        if !max_shunt_voltage.is_finite() || max_shunt_voltage > adc_range.full_scale_voltage() {
+        if !max_shunt_voltage.is_finite() || max_shunt_voltage >= adc_range.full_scale_voltage() {
             return Err(ConfigurationError::Calibration);
         }
 
@@ -160,6 +162,7 @@ pub struct Ina228<I2C> {
     address: u8,
     calibration: Option<Calibration>,
     adc_range: Option<AdcRange>,
+    shunt_voltage_stale: bool,
 }
 
 /// ADC operating mode, conversion times, and averaging configuration.
@@ -259,6 +262,7 @@ impl<I2C: I2c> Ina228<I2C> {
             address,
             calibration: None,
             adc_range: Some(adc_range),
+            shunt_voltage_stale: false,
         })
     }
 
@@ -268,9 +272,16 @@ impl<I2C: I2c> Ina228<I2C> {
     /// an I2C error does not prove whether the device accepted RESET. After an error,
     /// retry `reset()`, call [`set_adc_range`](Self::set_adc_range), or successfully
     /// [`calibrate`](Self::calibrate) before using range- or calibration-scaled operations.
+    ///
+    /// RESET is equivalent to power-up and this method does not delay. Wait at least
+    /// 300 µs for oscillator and ADC stability, then wait for a complete conversion
+    /// before reading measurements. VSHUNT remains unavailable until
+    /// [`take_diagnostic_flags`](Self::take_diagnostic_flags) observes conversion-ready
+    /// from a mode that includes the shunt channel.
     pub fn reset(&mut self) -> Result<(), Error<I2C::Error>> {
         self.calibration = None;
         self.adc_range = None;
+        self.shunt_voltage_stale = true;
         self.write_u16(Register::Config, config::RESET)?;
         self.adc_range = Some(AdcRange::Range163mV);
         Ok(())
@@ -292,8 +303,11 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Changing range disables the shunt over- and under-voltage alerts because their
     /// register scale depends on the selected range. Conversions are suspended while
     /// CONFIG and SHUNT_CAL are updated, then the previous ADC configuration is restored.
-    /// The caller must wait for a new conversion before reading measurements produced
-    /// under the new range; this method does not wait for conversion completion.
+    /// This method does not wait for conversion completion. VSHUNT returns
+    /// [`Error::ShuntVoltageStale`] until [`take_diagnostic_flags`](Self::take_diagnostic_flags)
+    /// observes conversion-ready from a mode that includes the shunt channel. A captured
+    /// shutdown or bus-only mode therefore requires configuring or triggering a shunt
+    /// conversion first.
     ///
     /// An I2C failure after conversions are suspended leaves the ADC in shutdown mode.
     /// A CONFIG write error makes the live range ambiguous, so range-scaled operations
@@ -315,6 +329,7 @@ impl<I2C: I2c> Ina228<I2C> {
         let config_value = self.read_u16(Register::Config)?;
         if self.adc_range.is_none() && AdcRange::from_config(config_value) == range {
             self.adc_range = Some(range);
+            self.shunt_voltage_stale = true;
             return Ok(());
         }
         let suspended = self.suspend_conversions()?;
@@ -325,6 +340,7 @@ impl<I2C: I2c> Ina228<I2C> {
         let value = range.apply_to_config(config_value);
         self.adc_range = None;
         self.calibration = None;
+        self.shunt_voltage_stale = true;
         self.write_u16(Register::Config, value)?;
 
         self.adc_range = Some(range);
@@ -339,7 +355,8 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Calibrate for current, power, energy, and charge measurement.
     ///
-    /// Conversions are suspended while SHUNT_CAL and the accumulators are updated.
+    /// Conversions are suspended while SHUNT_CAL and the accumulators are updated;
+    /// resetting the accumulators also clears the MATHOF diagnostic flag.
     /// PWR_LIMIT is reset to its least-restrictive value because its physical scale
     /// changes with CURRENT_LSB; call [`set_power_limit`](Self::set_power_limit) afterward
     /// to restore the desired watt threshold. The previous ADC configuration is then
@@ -355,6 +372,9 @@ impl<I2C: I2c> Ina228<I2C> {
     /// `calibrate()` call. If the ADC range was made unknown by an earlier error,
     /// calibration reads CONFIG to recover it. Use [`configure`](Self::configure) to
     /// resume conversions after an error.
+    /// The maximum shunt voltage must be strictly below the selected ADC range's
+    /// positive full-scale endpoint.
+    ///
     /// `max_current_a`: maximum expected current in Amps.
     /// `shunt_resistance_ohm`: shunt resistor value in Ohms.
     pub fn calibrate(
@@ -440,8 +460,14 @@ impl<I2C: I2c> Ina228<I2C> {
     }
 
     /// Returns shunt voltage in Volts. LSB depends on the configured ADC range.
+    ///
+    /// Returns [`Error::ShuntVoltageStale`] after reset or an ADC range change until
+    /// conversion-ready is acknowledged for a mode that includes the shunt channel.
     pub fn shunt_voltage(&mut self) -> Result<f32, Error<I2C::Error>> {
         let adc_range = self.adc_range.ok_or(Error::AdcRangeUnknown)?;
+        if self.shunt_voltage_stale {
+            return Err(Error::ShuntVoltageStale);
+        }
         let raw = self.read_i20(Register::Vshunt)?;
         Ok(raw as f32 * adc_range.shunt_voltage_lsb())
     }
@@ -473,6 +499,8 @@ impl<I2C: I2c> Ina228<I2C> {
     ///
     /// Reading DIAG_ALRT acknowledges conversion-ready and any latched threshold alerts.
     /// Reading ENERGY and CHARGE clears their respective overflow indicators. If an I2C
+    /// operation reports conversion-ready for a mode containing the shunt channel, the
+    /// snapshot also makes VSHUNT available after a reset or range change. If an I2C
     /// operation fails after suspension, the ADC remains in shutdown mode and earlier
     /// acknowledgement or clear-on-read effects may already have occurred. Use
     /// [`configure`](Self::configure) to resume conversions after an error.
@@ -488,7 +516,8 @@ impl<I2C: I2c> Ina228<I2C> {
             ));
         }
         let suspended = self.suspend_captured_conversions(adc_config)?;
-        let diagnostic_flags = self.take_diagnostic_flags()?;
+        let diagnostic_flags = self.read_diagnostic_flags()?;
+        self.update_shunt_freshness(diagnostic_flags, adc_config);
         let energy_raw = self.read_u40(Register::Energy)?;
         let charge_raw = self.read_i40(Register::Charge)?;
         let snapshot = AccumulatorSnapshot {
@@ -506,7 +535,7 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok(raw as f32 * 7.8125e-3)
     }
 
-    /// Resets the energy and charge accumulator registers to zero.
+    /// Resets the energy and charge accumulator registers and clears MATHOF.
     pub fn reset_accumulators(&mut self) -> Result<(), Error<I2C::Error>> {
         let config_value = self.read_u16(Register::Config)?;
         self.write_u16(Register::Config, config_value | config::RESET_ACCUMULATORS)
@@ -515,21 +544,16 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Takes all diagnostic and alert flags from the DIAG_ALRT register.
     ///
     /// This acknowledges conversion-ready and, in latched mode, threshold alert flags.
+    /// After reset or an ADC range change, a ready result from a mode that includes the
+    /// shunt channel also makes VSHUNT available under the current range. Checking that
+    /// mode requires one additional ADC_CONFIG read only at this freshness boundary.
     pub fn take_diagnostic_flags(&mut self) -> Result<DiagnosticFlags, Error<I2C::Error>> {
-        let d = self.read_u16(Register::DiagAlrt)?;
-        Ok(DiagnosticFlags {
-            memory_ok: d & diagnostic_alert::MEMORY_OK != 0,
-            conversion_ready: d & diagnostic_alert::CONVERSION_READY != 0,
-            energy_overflow: d & diagnostic_alert::ENERGY_OVERFLOW != 0,
-            math_overflow: d & diagnostic_alert::MATH_OVERFLOW != 0,
-            temp_over_limit: d & diagnostic_alert::TEMP_OVER_LIMIT != 0,
-            shunt_over_limit: d & diagnostic_alert::SHUNT_OVER_LIMIT != 0,
-            shunt_under_limit: d & diagnostic_alert::SHUNT_UNDER_LIMIT != 0,
-            bus_over_limit: d & diagnostic_alert::BUS_OVER_LIMIT != 0,
-            bus_under_limit: d & diagnostic_alert::BUS_UNDER_LIMIT != 0,
-            power_over_limit: d & diagnostic_alert::POWER_OVER_LIMIT != 0,
-            charge_overflow: d & diagnostic_alert::CHARGE_OVERFLOW != 0,
-        })
+        let diagnostic_flags = self.read_diagnostic_flags()?;
+        if self.shunt_voltage_stale && diagnostic_flags.conversion_ready {
+            let adc_config = self.read_u16(Register::AdcConfig)?;
+            self.update_shunt_freshness(diagnostic_flags, adc_config);
+        }
+        Ok(diagnostic_flags)
     }
 
     /// Configures alert pin behavior. Writing DIAG_ALRT acknowledges latched alerts.
@@ -641,6 +665,29 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Consumes the driver and returns the underlying I2C bus.
     pub fn release(self) -> I2C {
         self.i2c
+    }
+
+    fn read_diagnostic_flags(&mut self) -> Result<DiagnosticFlags, Error<I2C::Error>> {
+        let d = self.read_u16(Register::DiagAlrt)?;
+        Ok(DiagnosticFlags {
+            memory_ok: d & diagnostic_alert::MEMORY_OK != 0,
+            conversion_ready: d & diagnostic_alert::CONVERSION_READY != 0,
+            energy_overflow: d & diagnostic_alert::ENERGY_OVERFLOW != 0,
+            math_overflow: d & diagnostic_alert::MATH_OVERFLOW != 0,
+            temp_over_limit: d & diagnostic_alert::TEMP_OVER_LIMIT != 0,
+            shunt_over_limit: d & diagnostic_alert::SHUNT_OVER_LIMIT != 0,
+            shunt_under_limit: d & diagnostic_alert::SHUNT_UNDER_LIMIT != 0,
+            bus_over_limit: d & diagnostic_alert::BUS_OVER_LIMIT != 0,
+            bus_under_limit: d & diagnostic_alert::BUS_UNDER_LIMIT != 0,
+            power_over_limit: d & diagnostic_alert::POWER_OVER_LIMIT != 0,
+            charge_overflow: d & diagnostic_alert::CHARGE_OVERFLOW != 0,
+        })
+    }
+
+    fn update_shunt_freshness(&mut self, diagnostic_flags: DiagnosticFlags, adc_config: u16) {
+        if diagnostic_flags.conversion_ready && adc_config::converts_shunt(adc_config) {
+            self.shunt_voltage_stale = false;
+        }
     }
 
     fn suspend_conversions(&mut self) -> Result<SuspendedConversions, Error<I2C::Error>> {

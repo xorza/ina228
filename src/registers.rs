@@ -34,6 +34,10 @@ pub(crate) mod adc_config {
     pub(crate) const MODE_MASK: u16 = 0xF << 12;
     pub(crate) const ALTERNATE_SHUTDOWN_MODE: u16 = 8 << 12;
     pub(crate) const FIRST_CONTINUOUS_MODE: u16 = 9 << 12;
+
+    pub(crate) fn converts_shunt(value: u16) -> bool {
+        ((value & MODE_MASK) >> 12) & 0b0010 != 0
+    }
 }
 
 pub(crate) mod diagnostic_alert {
@@ -82,8 +86,8 @@ impl AdcRange {
 
     pub(crate) fn full_scale_voltage(self) -> f64 {
         match self {
-            Self::Range163mV => 0.16384,
-            Self::Range40mV => 0.04096,
+            Self::Range163mV => 0.16384_f32 as f64,
+            Self::Range40mV => 0.04096_f32 as f64,
         }
     }
 

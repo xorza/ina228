@@ -14,6 +14,8 @@
 - **Breaking:** Fallible methods now return `Error<I2C::Error>`, distinguishing I2C failures from `ConfigurationError` values.
 - **Breaking:** Range-scaled operations now return `Error::AdcRangeUnknown` after an ambiguous RESET or ADCRANGE write until state is recovered.
 - **Breaking:** `calibrate()` now resets PWR_LIMIT to `0xFFFF`; callers must configure their desired watt threshold again after calibration.
+- **Breaking:** `shunt_voltage()` now returns `Error::ShuntVoltageStale` after reset or an ADC range change until a completed shunt conversion is acknowledged.
+- **Breaking:** Calibration now rejects the positive full-scale endpoint instead of treating it as representable.
 - Physical-unit setters round to the nearest register value instead of truncating.
 
 ### Fixed
@@ -30,6 +32,8 @@
 - Accumulator snapshots no longer race continuous updates between DIAG_ALRT, ENERGY, and CHARGE reads.
 - RESET, ADCRANGE, and SHUNT_CAL write failures now invalidate dependent cached scale state before returning the I2C error.
 - Recalibration no longer silently changes the physical watt value represented by an existing PWR_LIMIT register value.
+- ADC range changes can no longer reinterpret a pre-change VSHUNT register value using the new range's scale.
+- Documented reset stabilization/readiness requirements and that RSTACC also clears MATHOF.
 
 ## 0.2.0 - 2026-04-27
 
