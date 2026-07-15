@@ -60,7 +60,9 @@ Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, po
 
 Calibration resets the energy and charge accumulators so their entire contents use the new `CURRENT_LSB` scale. If SHUNT_CAL is written but the accumulator reset fails, calibration-dependent operations remain unavailable until `calibrate()` succeeds again.
 
-If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
+If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. Range changes suspend conversions and disable the shunt over- and under-voltage alerts because those thresholds use a range-dependent scale; configure both thresholds again afterward. The previous ADC configuration is restored on success, but wait for a new conversion before reading measurements produced under the new range.
+
+An I2C failure after conversions are suspended leaves the ADC in shutdown mode and may already have disabled one or both shunt alerts. Call `configure()` to resume conversions. If the range update succeeds but the SHUNT_CAL write fails, call `calibrate()` again before using current, power, energy, charge, or power-limit operations.
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
 

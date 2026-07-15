@@ -3,7 +3,7 @@
 mod registers;
 
 use embedded_hal::i2c::I2c;
-use registers::{Register, config, diagnostic_alert};
+use registers::{Register, adc_config, config, diagnostic_alert};
 
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
@@ -253,15 +253,38 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Sets the shunt ADC full-scale range. Re-writes SHUNT_CAL if already calibrated.
     ///
+    /// Changing range disables the shunt over- and under-voltage alerts because their
+    /// register scale depends on the selected range. Conversions are suspended while
+    /// CONFIG and SHUNT_CAL are updated, then the previous ADC configuration is restored.
+    /// Wait for a new conversion before reading measurements produced under the new range.
+    ///
+    /// An I2C failure after conversions are suspended leaves the ADC in shutdown mode.
     /// If CONFIG succeeds but the SHUNT_CAL write fails, the new range remains active
-    /// and calibration-dependent operations require another [`calibrate`](Self::calibrate) call.
+    /// and calibration-dependent operations require another [`calibrate`](Self::calibrate)
+    /// call. Use [`configure`](Self::configure) to resume conversions after an error.
     pub fn set_adc_range(&mut self, range: AdcRange) -> Result<(), Error<I2C::Error>> {
+        if range == self.adc_range {
+            return Ok(());
+        }
+
         let calibration = self.calibration;
         let shunt_cal = calibration
             .map(|calibration| calibration.shunt_cal(range))
             .transpose()
             .map_err(Error::InvalidConfiguration)?;
         let config_value = self.read_u16(Register::Config)?;
+        let adc_config_value = self.read_u16(Register::AdcConfig)?;
+        let conversions_running = adc_config_value & adc_config::MODE_MASK != 0;
+        if conversions_running {
+            self.write_u16(
+                Register::AdcConfig,
+                adc_config_value & !adc_config::MODE_MASK,
+            )?;
+        }
+
+        self.write_u16(Register::Sovl, i16::MAX as u16)?;
+        self.write_u16(Register::Suvl, i16::MIN as u16)?;
+
         let value = match range {
             AdcRange::Range163mV => config_value & !config::ADC_RANGE,
             AdcRange::Range40mV => config_value | config::ADC_RANGE,
@@ -274,6 +297,10 @@ impl<I2C: I2c> Ina228<I2C> {
             self.calibration = None;
             self.write_u16(Register::ShuntCal, shunt_cal)?;
             self.calibration = calibration;
+        }
+
+        if conversions_running {
+            self.write_u16(Register::AdcConfig, adc_config_value)?;
         }
         Ok(())
     }

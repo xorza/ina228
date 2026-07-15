@@ -30,6 +30,10 @@ pub(crate) mod config {
     pub(crate) const ADC_RANGE: u16 = 1 << 4;
 }
 
+pub(crate) mod adc_config {
+    pub(crate) const MODE_MASK: u16 = 0xF << 12;
+}
+
 pub(crate) mod diagnostic_alert {
     pub(crate) const LATCH: u16 = 1 << 15;
     pub(crate) const CONVERSION_READY_ENABLE: u16 = 1 << 14;
