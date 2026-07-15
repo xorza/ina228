@@ -106,13 +106,12 @@ The INA228 supports 16 addresses (0x40-0x4F) configured via A0 and A1 pins:
 | SCL | SDA | 0x4E    |
 | SCL | SCL | 0x4F    |
 
-## ESP32 Example
+## ESP32-C6 hardware test suite
 
-A complete ESP32 example is in [`examples/esp32/`](examples/esp32/). It requires the ESP-IDF Rust toolchain and an ESP32 with an INA228 connected via I2C (GPIO8 SDA, GPIO9 SCL). The example's `.cargo/config.toml` is preconfigured for ESP32-C6; adjust `target` and `MCU` for other RISC-V variants (e.g. C3, C2).
+The hardware test suite in [`examples/esp32-c6-test-suite/`](examples/esp32-c6-test-suite/) exercises the complete public driver API against an INA228 connected to an ESP32-C6. It validates identification, reset behavior, every ADC mode/conversion-time/averaging value, both ADC ranges, calibration, measurements, temperature compensation, accumulators, diagnostics, thresholds, and alerts. See its README for fixture requirements.
 
 ```sh
-cd examples/esp32
-cargo run --release
+cargo run --manifest-path examples/esp32-c6-test-suite/Cargo.toml --release
 ```
 
 ## License
