@@ -17,10 +17,10 @@ cargo clippy --all-targets
 cargo fmt
 ```
 
-ESP32 example (separate workspace under `examples/esp32/`, requires the ESP-IDF Rust toolchain):
+ESP32-C6 hardware test suite (separate workspace under `examples/esp32-c6-test-suite/`, requires the ESP-IDF Rust toolchain):
 
 ```sh
-cd examples/esp32
+cd examples/esp32-c6-test-suite
 cargo run --release        # default target is ESP32-C6; edit .cargo/config.toml + MCU env for other RISC-V variants
 ```
 
