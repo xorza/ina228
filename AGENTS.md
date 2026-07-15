@@ -30,7 +30,7 @@ The example is excluded from the published crate via `exclude = ["examples/"]` i
 
 Two-file driver:
 
-- `src/lib.rs` — the `Ina228<I2C>` struct and all public API. Methods take `&mut self` and an `embedded-hal` 1.0 `I2c` bus. Fallible methods return `Error<I2C::Error>`, separating bus failures from invalid physical configuration.
+- `src/lib.rs` — the `Ina228<I2C>` struct and all public API. Methods take `&mut self` and an `embedded-hal` 1.0 `I2c` bus. Fallible operations return `Error<I2C::Error>`, separating bus failures from invalid physical configuration; construction returns `InitializationError<I2C>` so an I2C read failure does not consume the bus.
 - `src/registers.rs` — the internal `Register` address enum plus the public configuration enums (`AdcRange`, `ConversionTime`, `AveragingCount`, `OperatingMode`) re-exported from `lib.rs`.
 
 Key state held in `Ina228`: `calibration: Option<Calibration>` (containing `current_lsb` and `shunt_resistance_ohm`) and `adc_range`. Construction reads CONFIG and synchronizes `adc_range` with the live device. Calibration is absent after construction, reset, or a failed range-dependent SHUNT_CAL rewrite. Current, power, energy, charge, power-limit, and SHUNT_CAL calculations depend on it.

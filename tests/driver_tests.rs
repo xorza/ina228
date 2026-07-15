@@ -87,16 +87,17 @@ fn new_max_address() {
 }
 
 #[test]
-fn new_propagates_config_read_error() {
+fn new_returns_i2c_with_config_read_error() {
     let i2c = Mock::new(&[
         Transaction::write_read(ADDR, vec![0x00], vec![0x00, 0x00]).with_error(ErrorKind::Bus)
     ]);
-    let mut verifier = i2c.clone();
-    assert!(matches!(
-        Ina228::new(i2c, ADDR),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    ));
-    verifier.done();
+    let initialization_error = match Ina228::new(i2c, ADDR) {
+        Ok(_) => panic!("expected CONFIG read to fail"),
+        Err(error) => error,
+    };
+    assert_eq!(initialization_error.error, ErrorKind::Bus);
+    let mut i2c = initialization_error.i2c;
+    i2c.done();
 }
 
 #[test]

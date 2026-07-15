@@ -20,7 +20,8 @@ use ina228::{
     AdcConfig, AveragingCount, Ina228, DEFAULT_ADDRESS,
 };
 
-let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS).unwrap();
+let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS)
+    .unwrap_or_else(|_| panic!("failed to read INA228 CONFIG"));
 
 // Configure: continuous bus+shunt+temp, 1052µs conversion, 64x averaging
 ina.configure(AdcConfig {
@@ -61,7 +62,7 @@ If you change the ADC range via `set_adc_range()` after calling `calibrate()`, t
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
 
-Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. `Ina228::new()` therefore returns `Result` and can fail with `Error::I2c`.
+Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. On failure, `Ina228::new()` returns an `InitializationError` containing both the underlying I2C error and the I2C bus, allowing the caller to recover the peripheral or retry initialization.
 
 `AdcConfig::default()` matches the datasheet ADC_CONFIG reset value: continuous conversion of all channels, 1052 µs conversion times, and one-sample averaging.
 

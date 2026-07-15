@@ -18,7 +18,8 @@ fn main() {
     )
     .unwrap();
 
-    let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS).unwrap();
+    let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS)
+        .unwrap_or_else(|_| panic!("failed to read INA228 CONFIG"));
 
     // Verify chip identity
     let mfr = ina.manufacturer_id().unwrap();

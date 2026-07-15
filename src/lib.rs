@@ -50,6 +50,15 @@ impl<E> From<E> for Error<E> {
     }
 }
 
+/// CONFIG-read failure returned while constructing an [`Ina228`].
+#[derive(Debug)]
+pub struct InitializationError<I2C: I2c> {
+    /// I2C bus returned to the caller for recovery or retry.
+    pub i2c: I2C,
+    /// Error reported by the I2C bus.
+    pub error: I2C::Error,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Calibration {
     current_lsb: f32,
@@ -194,24 +203,27 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Creates a driver and reads CONFIG to synchronize the ADC range.
     ///
     /// Panics if `address` is not in `0x40..=0x4F`.
-    pub fn new(i2c: I2C, address: u8) -> Result<Self, Error<I2C::Error>> {
+    pub fn new(i2c: I2C, address: u8) -> Result<Self, InitializationError<I2C>> {
         assert!(
             (0x40..=0x4F).contains(&address),
             "INA228 address must be in 0x40..=0x4F"
         );
-        let mut ina = Self {
-            i2c,
-            address,
-            calibration: None,
-            adc_range: AdcRange::Range163mV,
+        let mut i2c = i2c;
+        let config_value = match Self::read_u16_from(&mut i2c, address, Register::Config) {
+            Ok(value) => value,
+            Err(error) => return Err(InitializationError { i2c, error }),
         };
-        let config_value = ina.read_u16(Register::Config)?;
-        ina.adc_range = if config_value & config::ADC_RANGE == 0 {
+        let adc_range = if config_value & config::ADC_RANGE == 0 {
             AdcRange::Range163mV
         } else {
             AdcRange::Range40mV
         };
-        Ok(ina)
+        Ok(Self {
+            i2c,
+            address,
+            calibration: None,
+            adc_range,
+        })
     }
 
     /// Performs a soft reset, restoring all registers to defaults.
@@ -520,10 +532,14 @@ impl<I2C: I2c> Ina228<I2C> {
 
     // --- I2C helpers ---
 
-    fn read_u16(&mut self, reg: Register) -> Result<u16, Error<I2C::Error>> {
+    fn read_u16_from(i2c: &mut I2C, address: u8, reg: Register) -> Result<u16, I2C::Error> {
         let mut buf = [0u8; 2];
-        self.i2c.write_read(self.address, &[reg as u8], &mut buf)?;
+        i2c.write_read(address, &[reg as u8], &mut buf)?;
         Ok(u16::from_be_bytes(buf))
+    }
+
+    fn read_u16(&mut self, reg: Register) -> Result<u16, Error<I2C::Error>> {
+        Self::read_u16_from(&mut self.i2c, self.address, reg).map_err(Error::I2c)
     }
 
     fn write_u16(&mut self, reg: Register, value: u16) -> Result<(), Error<I2C::Error>> {
