@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use embedded_hal::{digital::InputPin, i2c::I2c};
 use ina228::{
     AdcConfig, AdcRange, AlertConfig, AveragingCount, ConversionTime, DEVICE_ID, DiagnosticFlags,
-    Error, Ina228, MANUFACTURER_ID, OperatingMode,
+    Ina228, MANUFACTURER_ID, OperatingMode,
 };
 
 use crate::suite::{ResultContext, TestResult, require};
@@ -187,12 +187,6 @@ where
     I2C::Error: Debug,
 {
     reset_device(ina)?;
-    match ina.shunt_voltage() {
-        Err(Error::ShuntVoltageStale) => {}
-        Err(error) => return Err(format!("unexpected post-reset shunt error: {error:?}")),
-        Ok(value) => return Err(format!("post-reset shunt voltage was not stale: {value} V")),
-    }
-
     let flags = wait_for_conversion(ina)?;
     validate_clean_diagnostics(flags)?;
     let measurements = read_uncalibrated_measurements(ina)?;
@@ -314,7 +308,6 @@ where
 
     ina.set_adc_range(AdcRange::Range40mV)
         .context("change to 40 mV range")?;
-    expect_stale_shunt_voltage(ina, "40 mV range change")?;
     wait_for_conversion(ina)?;
     let shunt_40 = ina.shunt_voltage().context("read 40 mV shunt voltage")?;
     let current_40 = ina
@@ -328,7 +321,6 @@ where
 
     ina.set_adc_range(AdcRange::Range163mV)
         .context("change back to 163 mV range")?;
-    expect_stale_shunt_voltage(ina, "163 mV range change")?;
     wait_for_conversion(ina)?;
     let shunt_163 = ina
         .shunt_voltage()
@@ -972,18 +964,6 @@ fn validate_snapshot(
     require(!flags.energy_overflow, "energy accumulator overflowed")?;
     require(!flags.charge_overflow, "charge accumulator overflowed")?;
     require(!flags.math_overflow, "device math overflowed")
-}
-
-fn expect_stale_shunt_voltage<I2C>(ina: &mut Ina228<I2C>, case: &str) -> TestResult
-where
-    I2C: I2c,
-    I2C::Error: Debug,
-{
-    match ina.shunt_voltage() {
-        Err(Error::ShuntVoltageStale) => Ok(()),
-        Err(error) => Err(format!("{case}: returned {error:?}")),
-        Ok(voltage) => Err(format!("{case}: returned stale value {voltage} V")),
-    }
 }
 
 fn set_safe_limits<I2C>(ina: &mut Ina228<I2C>) -> TestResult

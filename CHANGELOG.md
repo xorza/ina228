@@ -12,9 +12,9 @@
 - **Breaking:** Replaced separate `energy()` and `charge()` reads with `take_accumulator_snapshot()`, which returns both values and their pre-read diagnostic state in `AccumulatorSnapshot`.
 - **Breaking:** `take_accumulator_snapshot()` now returns `ConfigurationError::AccumulatorMode` outside continuous conversion modes and briefly suspends conversion for a coherent capture.
 - **Breaking:** Fallible methods now return `Error<I2C::Error>`, distinguishing I2C failures from `ConfigurationError` values.
-- **Breaking:** Range-scaled operations now return `Error::AdcRangeUnknown` after an ambiguous RESET or ADCRANGE write until state is recovered.
+- **Breaking:** Methods that write to the device now use a fail-stop error contract: after an I2C error, reset or reconstruct the driver before further scaled operations.
 - **Breaking:** `calibrate()` now resets PWR_LIMIT to `0xFFFF`; callers must configure their desired watt threshold again after calibration.
-- **Breaking:** `shunt_voltage()` now returns `Error::ShuntVoltageStale` after reset or an ADC range change until a completed shunt conversion is acknowledged.
+- **Breaking:** Measurement freshness is now the caller's responsibility; state-changing methods do not wait for conversion completion or track per-channel readiness.
 - **Breaking:** Calibration now rejects the positive full-scale endpoint instead of treating it as representable.
 - Physical-unit setters round to the nearest register value instead of truncating.
 
@@ -30,9 +30,7 @@
 - Both ADC_CONFIG shutdown encodings are preserved across calibration, range, and temperature-compensation changes.
 - Diagnostic and accumulator reads no longer discard clear-on-read status without returning the captured flags.
 - Accumulator snapshots no longer race continuous updates between DIAG_ALRT, ENERGY, and CHARGE reads.
-- RESET, ADCRANGE, and SHUNT_CAL write failures now invalidate dependent cached scale state before returning the I2C error.
 - Recalibration no longer silently changes the physical watt value represented by an existing PWR_LIMIT register value.
-- ADC range changes can no longer reinterpret a pre-change VSHUNT register value using the new range's scale.
 - Documented reset stabilization/readiness requirements and that RSTACC also clears MATHOF.
 
 ## 0.2.0 - 2026-04-27

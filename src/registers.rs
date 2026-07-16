@@ -34,10 +34,6 @@ pub(crate) mod adc_config {
     pub(crate) const MODE_MASK: u16 = 0xF << 12;
     pub(crate) const ALTERNATE_SHUTDOWN_MODE: u16 = 8 << 12;
     pub(crate) const FIRST_CONTINUOUS_MODE: u16 = 9 << 12;
-
-    pub(crate) fn converts_shunt(value: u16) -> bool {
-        ((value & MODE_MASK) >> 12) & 0b0010 != 0
-    }
 }
 
 pub(crate) mod diagnostic_alert {

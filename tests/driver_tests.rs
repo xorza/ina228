@@ -9,8 +9,6 @@ const ADDR: u8 = DEFAULT_ADDRESS;
 const DEFAULT_ADC_CONFIG: u16 = 0xFB68;
 const SHUTDOWN_ADC_CONFIG: u16 = 0x0B68;
 const SHUTDOWN_ALT_ADC_CONFIG: u16 = 0x8B68;
-const CONTINUOUS_BUS_ADC_CONFIG: u16 = 0x9B68;
-const CONTINUOUS_SHUNT_ADC_CONFIG: u16 = 0xAB68;
 const ADC_MODE_MASK: u16 = 0xF000;
 
 /// Compute SHUNT_CAL the same way the driver does (f32 current_lsb, then f64 multiply).
@@ -178,67 +176,6 @@ fn reset() {
 }
 
 #[test]
-fn reset_write_failure_invalidates_scale_state_until_recovery() {
-    let shunt_cal = expected_shunt_cal(4.0, 0.01, true);
-    let reset_failure = Transaction::write(ADDR, vec![0x00, 0x80, 0x00]).with_error(ErrorKind::Bus);
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 1 << 4));
-    transactions.extend([
-        reset_failure,
-        write_txn(0x00, 1 << 15),
-        read_txn(0x0B, &(1_u16 << 1).to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        read_txn(0x04, &u24_bytes(3200 << 4)),
-    ]);
-    let i2c = mock_with_config(1 << 4, &transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(4.0, 0.01).unwrap();
-
-    assert_eq!(ina.reset(), Err(DriverError::I2c(ErrorKind::Bus)));
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::AdcRangeUnknown));
-    assert_eq!(
-        ina.set_shunt_overvoltage_limit(0.01),
-        Err(DriverError::AdcRangeUnknown)
-    );
-
-    ina.reset().unwrap();
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    assert!(ina.take_diagnostic_flags().unwrap().conversion_ready);
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V in the reset 163mV range, got {shunt_voltage}"
-    );
-    ina.release().done();
-
-    let shunt_cal = expected_shunt_cal(4.0, 0.01, true);
-    let reset_failure = Transaction::write(ADDR, vec![0x00, 0x80, 0x00]).with_error(ErrorKind::Bus);
-    let i2c = mock_with_config(
-        1 << 4,
-        &[
-            reset_failure,
-            read_txn(0x00, &(1_u16 << 4).to_be_bytes()),
-            read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-            write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-            write_txn(0x02, shunt_cal),
-            read_txn(0x00, &(1_u16 << 4).to_be_bytes()),
-            write_txn(0x00, (1 << 14) | (1 << 4)),
-            write_txn(0x11, u16::MAX),
-            write_txn(0x01, DEFAULT_ADC_CONFIG),
-            read_txn(0x07, &u24_bytes(262144 << 4)),
-        ],
-    );
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-
-    assert_eq!(ina.reset(), Err(DriverError::I2c(ErrorKind::Bus)));
-    ina.calibrate(4.0, 0.01).unwrap();
-    assert_eq!(ina.current().unwrap(), 2.0);
-    ina.release().done();
-}
-
-#[test]
 fn configure_encodes_every_adc_enum_variant() {
     let mode_cases = [
         (OperatingMode::Shutdown, 0x0),
@@ -389,192 +326,6 @@ fn set_adc_range_preserves_shutdown_mode() {
         ina.set_adc_range(AdcRange::Range40mV).unwrap();
         ina.release().done();
     }
-}
-
-#[test]
-fn range_change_requires_completed_shunt_conversion() {
-    let i2c = mock(&[
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        write_txn(0x00, 1 << 4),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-        read_txn(0x0B, &0_u16.to_be_bytes()),
-        read_txn(0x0B, &(1_u16 << 1).to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        read_txn(0x04, &u24_bytes(12800 << 4)),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.set_adc_range(AdcRange::Range40mV).unwrap();
-
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    assert!(!ina.take_diagnostic_flags().unwrap().conversion_ready);
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    assert!(ina.take_diagnostic_flags().unwrap().conversion_ready);
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V from the fresh 40mV conversion, got {shunt_voltage}"
-    );
-    ina.release().done();
-
-    let i2c = mock(&[
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &SHUTDOWN_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        write_txn(0x00, 1 << 4),
-        write_txn(0x01, CONTINUOUS_BUS_ADC_CONFIG),
-        read_txn(0x0B, &(1_u16 << 1).to_be_bytes()),
-        read_txn(0x01, &CONTINUOUS_BUS_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, CONTINUOUS_SHUNT_ADC_CONFIG),
-        read_txn(0x0B, &(1_u16 << 1).to_be_bytes()),
-        read_txn(0x01, &CONTINUOUS_SHUNT_ADC_CONFIG.to_be_bytes()),
-        read_txn(0x04, &u24_bytes(12800 << 4)),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.set_adc_range(AdcRange::Range40mV).unwrap();
-
-    ina.configure(AdcConfig {
-        mode: OperatingMode::ContinuousBus,
-        ..Default::default()
-    })
-    .unwrap();
-    assert!(ina.take_diagnostic_flags().unwrap().conversion_ready);
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    ina.configure(AdcConfig {
-        mode: OperatingMode::ContinuousShunt,
-        ..Default::default()
-    })
-    .unwrap();
-    assert!(ina.take_diagnostic_flags().unwrap().conversion_ready);
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V after the first shunt conversion, got {shunt_voltage}"
-    );
-    ina.release().done();
-
-    let shunt_cal = expected_shunt_cal(4.0, 0.01, true);
-    let mut transactions = vec![
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        write_txn(0x00, 1 << 4),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-    ];
-    transactions.extend(active_calibration_txns(shunt_cal, 1 << 4));
-    transactions.extend(continuous_snapshot_txns(DEFAULT_ADC_CONFIG, 1 << 1, 0, 0));
-    transactions.push(read_txn(0x04, &u24_bytes(12800 << 4)));
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.set_adc_range(AdcRange::Range40mV).unwrap();
-    ina.calibrate(4.0, 0.01).unwrap();
-
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    assert!(
-        ina.take_accumulator_snapshot()
-            .unwrap()
-            .diagnostic_flags
-            .conversion_ready
-    );
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected snapshot acknowledgement to publish fresh VSHUNT, got {shunt_voltage}"
-    );
-    ina.release().done();
-
-    let failed_mode_read =
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()).with_error(ErrorKind::Bus);
-    let i2c = mock(&[
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        write_txn(0x00, 1 << 4),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-        read_txn(0x0B, &(1_u16 << 1).to_be_bytes()),
-        failed_mode_read,
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.set_adc_range(AdcRange::Range40mV).unwrap();
-
-    assert!(matches!(
-        ina.take_diagnostic_flags(),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    ));
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    ina.release().done();
-}
-
-#[test]
-fn set_adc_range_pre_config_failures_preserve_range() {
-    let failed_shutdown =
-        Transaction::write(ADDR, vec![0x01, 0x0B, 0x68]).with_error(ErrorKind::Bus);
-    let i2c = mock(&[
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        failed_shutdown,
-        read_txn(0x04, &u24_bytes(3200 << 4)),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(
-        ina.set_adc_range(AdcRange::Range40mV),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V in the preserved 163mV range, got {shunt_voltage}"
-    );
-    ina.release().done();
-
-    let failed_sovl = Transaction::write(ADDR, vec![0x0C, 0x7F, 0xFF]).with_error(ErrorKind::Bus);
-    let i2c = mock(&[
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        failed_sovl,
-        read_txn(0x04, &u24_bytes(3200 << 4)),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(
-        ina.set_adc_range(AdcRange::Range40mV),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V in the preserved 163mV range, got {shunt_voltage}"
-    );
-    ina.release().done();
-
-    let failed_suvl = Transaction::write(ADDR, vec![0x0D, 0x80, 0x00]).with_error(ErrorKind::Bus);
-    let i2c = mock(&[
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        failed_suvl,
-        read_txn(0x04, &u24_bytes(3200 << 4)),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(
-        ina.set_adc_range(AdcRange::Range40mV),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V in the preserved 163mV range, got {shunt_voltage}"
-    );
-    ina.release().done();
 }
 
 #[test]
@@ -850,14 +601,13 @@ fn accumulator_snapshot_requires_continuous_mode() {
 }
 
 #[test]
-fn accumulator_snapshot_failures_leave_conversions_suspended() {
+fn accumulator_snapshot_propagates_capture_and_restore_failures() {
     let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
     let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
     transactions.extend([
         read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
         write_txn(0x01, SHUTDOWN_ADC_CONFIG),
         read_txn(0x0B, &[0, 0]).with_error(ErrorKind::Bus),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
@@ -867,7 +617,6 @@ fn accumulator_snapshot_failures_leave_conversions_suspended() {
         ina.take_accumulator_snapshot(),
         Err(DriverError::I2c(ErrorKind::Bus))
     ));
-    ina.configure(AdcConfig::default()).unwrap();
     ina.release().done();
 
     let failed_restore =
@@ -880,7 +629,6 @@ fn accumulator_snapshot_failures_leave_conversions_suspended() {
         read_txn(0x09, &u40_bytes(0)),
         read_txn(0x0A, &u40_bytes(0)),
         failed_restore,
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
@@ -890,7 +638,6 @@ fn accumulator_snapshot_failures_leave_conversions_suspended() {
         ina.take_accumulator_snapshot(),
         Err(DriverError::I2c(ErrorKind::Bus))
     ));
-    ina.configure(AdcConfig::default()).unwrap();
     ina.release().done();
 }
 
@@ -937,7 +684,7 @@ fn set_temp_compensation() {
 }
 
 #[test]
-fn set_temp_compensation_write_failures_are_safe() {
+fn set_temp_compensation_propagates_write_failures() {
     let failed_shutdown =
         Transaction::write(ADDR, vec![0x01, 0x0B, 0x68]).with_error(ErrorKind::Bus);
     let i2c = mock(&[
@@ -991,14 +738,12 @@ fn set_temp_compensation_write_failures_are_safe() {
         write_txn(0x03, 15),
         write_txn(0x00, 1 << 5),
         failed_restore,
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     assert_eq!(
         ina.set_temp_compensation(15),
         Err(DriverError::I2c(ErrorKind::Bus))
     );
-    ina.configure(AdcConfig::default()).unwrap();
     ina.release().done();
 }
 
@@ -1324,112 +1069,6 @@ fn set_adc_range_after_calibrate_recalibrates() {
 }
 
 #[test]
-fn set_adc_range_restore_failure_keeps_new_range_and_calibration() {
-    let shunt_cal_163mv = expected_shunt_cal(4.0, 0.01, false);
-    let shunt_cal_40mv = expected_shunt_cal(4.0, 0.01, true);
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_163mv, 0));
-    transactions.extend([
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        write_txn(0x00, 1 << 4),
-        write_txn(0x02, shunt_cal_40mv),
-        Transaction::write(ADDR, vec![0x01, 0xFB, 0x68]).with_error(ErrorKind::Bus),
-        read_txn(0x07, &u24_bytes(262144 << 4)),
-        write_txn(0x0C, 8000),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-    ]);
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(4.0, 0.01).unwrap();
-
-    assert_eq!(
-        ina.set_adc_range(AdcRange::Range40mV),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    assert_eq!(ina.current().unwrap(), 2.0);
-    ina.set_shunt_overvoltage_limit(0.01).unwrap();
-    ina.configure(AdcConfig::default()).unwrap();
-    ina.release().done();
-}
-
-#[test]
-fn set_adc_range_config_error_invalidates_scale_state_until_readback() {
-    let shunt_cal = expected_shunt_cal(4.0, 0.01, false);
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
-    transactions.extend([
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        Transaction::write(ADDR, vec![0x00, 0x00, 0x10]).with_error(ErrorKind::Bus),
-        read_txn(0x00, &(1_u16 << 4).to_be_bytes()),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-        read_txn(0x0B, &(1_u16 << 1).to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        read_txn(0x04, &u24_bytes(12800 << 4)),
-    ]);
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(4.0, 0.01).unwrap();
-
-    assert!(ina.set_adc_range(AdcRange::Range40mV).is_err());
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::AdcRangeUnknown));
-    assert_eq!(
-        ina.set_shunt_overvoltage_limit(0.01),
-        Err(DriverError::AdcRangeUnknown)
-    );
-
-    ina.set_adc_range(AdcRange::Range40mV).unwrap();
-    ina.configure(AdcConfig::default()).unwrap();
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    assert!(ina.take_diagnostic_flags().unwrap().conversion_ready);
-    let shunt_voltage = ina.shunt_voltage().unwrap();
-    assert!(
-        (shunt_voltage - 0.001).abs() < 1e-6,
-        "expected 0.001V in the synchronized 40mV range, got {shunt_voltage}"
-    );
-    ina.release().done();
-}
-
-#[test]
-fn set_adc_range_shunt_cal_error_invalidates_calibration() {
-    let shunt_cal_163mv = expected_shunt_cal(4.0, 0.01, false);
-    let shunt_cal_40mv = expected_shunt_cal(4.0, 0.01, true);
-    let shunt_cal_40mv_bytes = shunt_cal_40mv.to_be_bytes();
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_163mv, 0));
-    transactions.extend([
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x0C, i16::MAX as u16),
-        write_txn(0x0D, i16::MIN as u16),
-        write_txn(0x00, 1 << 4),
-        Transaction::write(
-            ADDR,
-            vec![0x02, shunt_cal_40mv_bytes[0], shunt_cal_40mv_bytes[1]],
-        )
-        .with_error(ErrorKind::Bus),
-    ]);
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(4.0, 0.01).unwrap();
-
-    assert!(ina.set_adc_range(AdcRange::Range40mV).is_err());
-    assert_eq!(ina.shunt_voltage(), Err(DriverError::ShuntVoltageStale));
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    ina.release().done();
-}
-
-#[test]
 fn set_adc_range_rejects_incompatible_calibration_without_i2c() {
     let shunt_cal = expected_shunt_cal(10.0, 0.01, false);
     let mut transactions = Vec::from(active_calibration_txns(shunt_cal, 0));
@@ -1482,135 +1121,6 @@ fn calibrate_preserves_shutdown_modes() {
         ina.calibrate(10.0, 0.01).unwrap();
         ina.release().done();
     }
-}
-
-#[test]
-fn calibrate_failures_leave_safe_state() {
-    let shunt_cal_ok = expected_shunt_cal(10.0, 0.01, false);
-    let shunt_cal_fail = expected_shunt_cal(2.0, 0.04, false);
-    let fail_bytes = shunt_cal_fail.to_be_bytes();
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_ok, 0));
-    transactions.extend([
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        Transaction::write(ADDR, vec![0x02, fail_bytes[0], fail_bytes[1]])
-            .with_error(ErrorKind::Bus),
-    ]);
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(10.0, 0.01).unwrap();
-
-    assert_eq!(
-        ina.calibrate(2.0, 0.04),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    ina.release().done();
-
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_ok, 0));
-    transactions.extend([
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x02, shunt_cal_fail),
-        read_txn(0x00, &0x0000_u16.to_be_bytes()).with_error(ErrorKind::Bus),
-    ]);
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(10.0, 0.01).unwrap();
-
-    assert_eq!(
-        ina.calibrate(2.0, 0.04),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    ina.release().done();
-
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_ok, 0));
-    transactions.extend([
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x02, shunt_cal_fail),
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        Transaction::write(ADDR, vec![0x00, 0x40, 0x00]).with_error(ErrorKind::Bus),
-    ]);
-    transactions.push(write_txn(0x01, DEFAULT_ADC_CONFIG));
-    transactions.extend(active_calibration_txns(shunt_cal_fail, 0));
-    transactions.push(read_txn(0x07, &u24_bytes(262144 << 4)));
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(10.0, 0.01).unwrap();
-
-    assert_eq!(
-        ina.calibrate(2.0, 0.04),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    ina.configure(AdcConfig::default()).unwrap();
-    ina.calibrate(2.0, 0.04).unwrap();
-    let current = ina.current().unwrap();
-    assert!(
-        (current - 1.0).abs() < 0.001,
-        "expected ~1.0A (replacement calibration), got {current}"
-    );
-    ina.release().done();
-
-    let failed_power_limit =
-        Transaction::write(ADDR, vec![0x11, 0xFF, 0xFF]).with_error(ErrorKind::Bus);
-    let mut transactions = Vec::from(active_calibration_txns(shunt_cal_ok, 0));
-    transactions.extend([
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x02, shunt_cal_fail),
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        write_txn(0x00, 1 << 14),
-        failed_power_limit,
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-    ]);
-    let i2c = mock(&transactions);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.calibrate(10.0, 0.01).unwrap();
-
-    assert_eq!(
-        ina.calibrate(2.0, 0.04),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    assert_panics_with("call calibrate() before reading current", || {
-        let _ = ina.current();
-    });
-    ina.configure(AdcConfig::default()).unwrap();
-    ina.release().done();
-
-    let failed_restore =
-        Transaction::write(ADDR, vec![0x01, 0xFB, 0x68]).with_error(ErrorKind::Bus);
-    let i2c = mock(&[
-        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
-        write_txn(0x01, SHUTDOWN_ADC_CONFIG),
-        write_txn(0x02, shunt_cal_fail),
-        read_txn(0x00, &0x0000_u16.to_be_bytes()),
-        write_txn(0x00, 1 << 14),
-        write_txn(0x11, u16::MAX),
-        failed_restore,
-        read_txn(0x07, &u24_bytes(262144 << 4)),
-        write_txn(0x01, DEFAULT_ADC_CONFIG),
-    ]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(
-        ina.calibrate(2.0, 0.04),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    );
-    let current = ina.current().unwrap();
-    assert!(
-        (current - 1.0).abs() < 0.001,
-        "expected ~1.0A (replacement calibration), got {current}"
-    );
-    ina.configure(AdcConfig::default()).unwrap();
-    ina.release().done();
 }
 
 #[test]
