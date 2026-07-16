@@ -2,6 +2,7 @@ pub(crate) mod cases;
 
 use std::fmt::Debug;
 
+use embedded_hal::digital::InputPin;
 use embedded_hal::i2c::I2c;
 use ina228::{DEFAULT_ADDRESS, Ina228, InitializationError};
 
@@ -21,6 +22,7 @@ impl<T, E: Debug> ResultContext<T> for Result<T, E> {
 struct Summary {
     passed: u32,
     failed: u32,
+    skipped: u32,
 }
 
 impl Summary {
@@ -47,10 +49,15 @@ impl Summary {
         self.record(name, test(ina));
     }
 
+    fn skip(&mut self, name: &str, reason: &str) {
+        self.skipped += 1;
+        println!("[SKIP] {name}: {reason}");
+    }
+
     fn finish(&self) {
         println!(
-            "INA228 hardware test suite complete: {} passed, {} failed",
-            self.passed, self.failed
+            "INA228 hardware test suite complete: {} passed, {} failed, {} skipped",
+            self.passed, self.failed, self.skipped
         );
         assert_eq!(self.failed, 0, "INA228 hardware test suite failed");
     }
@@ -64,10 +71,12 @@ pub(crate) fn require(condition: bool, message: impl Into<String>) -> TestResult
     }
 }
 
-pub(crate) fn run<I2C>(i2c: I2C)
+pub(crate) fn run<I2C, ALERT>(i2c: I2C, mut alert: ALERT)
 where
     I2C: I2c,
     I2C::Error: Debug,
+    ALERT: InputPin,
+    ALERT::Error: Debug,
 {
     println!("Starting ESP32-C6 + INA228 hardware test suite");
     let mut summary = Summary::default();
@@ -149,7 +158,27 @@ where
         &mut ina,
         cases::accumulators,
     );
-    summary.run("alert thresholds and flags", &mut ina, cases::alerts);
+    summary.run("ALERT pin active-low transparent", &mut ina, |ina| {
+        cases::alert_active_low(ina, &mut alert)
+    });
+    summary.run("ALERT pin active-high transparent", &mut ina, |ina| {
+        cases::alert_active_high(ina, &mut alert)
+    });
+    summary.run("ALERT pin latch and acknowledge", &mut ina, |ina| {
+        cases::alert_latch(ina, &mut alert)
+    });
+    summary.run("ALERT pin conversion-ready", &mut ina, |ina| {
+        cases::alert_conversion_ready(ina, &mut alert)
+    });
+    summary.skip(
+        "ALERT pin slow-alert timing",
+        "fixture has no controllable transient; control-bit encoding is covered by host tests",
+    );
+    summary.run(
+        "alert threshold status flags",
+        &mut ina,
+        cases::alert_threshold_flags,
+    );
 
     let _i2c = ina.release();
     summary.record("release returns the I2C bus", Ok(()));

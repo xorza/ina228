@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use embedded_hal::i2c::I2c;
+use embedded_hal::{digital::InputPin, i2c::I2c};
 use ina228::{
     AdcConfig, AdcRange, AlertConfig, AveragingCount, ConfigurationError, ConversionTime,
     DEVICE_ID, DiagnosticFlags, Error, Ina228, MANUFACTURER_ID, OperatingMode,
@@ -24,6 +24,7 @@ const ALERT_SHUNT_LIMIT_V: f32 = 0.03;
 const SAFE_POWER_LIMIT_W: f32 = MAX_CURRENT_A * 100.0;
 const CONVERSION_TIMEOUT: Duration = Duration::from_secs(3);
 const RESET_STABILIZATION: Duration = Duration::from_millis(1);
+const ALERT_LATCH_OBSERVATION_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy)]
 struct ModeCase {
@@ -550,38 +551,106 @@ where
     Ok(())
 }
 
-pub(crate) fn alerts<I2C>(ina: &mut Ina228<I2C>) -> TestResult
+pub(crate) fn alert_active_low<I2C, ALERT>(ina: &mut Ina228<I2C>, alert: &mut ALERT) -> TestResult
+where
+    I2C: I2c,
+    I2C::Error: Debug,
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    alert_transparent_polarity(ina, alert, false)
+}
+
+pub(crate) fn alert_active_high<I2C, ALERT>(ina: &mut Ina228<I2C>, alert: &mut ALERT) -> TestResult
+where
+    I2C: I2c,
+    I2C::Error: Debug,
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    alert_transparent_polarity(ina, alert, true)
+}
+
+pub(crate) fn alert_latch<I2C, ALERT>(ina: &mut Ina228<I2C>, alert: &mut ALERT) -> TestResult
+where
+    I2C: I2c,
+    I2C::Error: Debug,
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    prepare_alert_fixture(ina)?;
+    ina.configure_alerts(AlertConfig {
+        latch: true,
+        ..AlertConfig::default()
+    })
+    .context("enable latched ALERT mode")?;
+    wait_for_alert_level(alert, true, "latched ALERT idle state")?;
+
+    ina.set_bus_overvoltage_limit(0.0)
+        .context("trigger latched bus overvoltage alert")?;
+    wait_for_alert_level(alert, false, "latched ALERT assertion")?;
+    ina.set_bus_overvoltage_limit(MAX_BUS_VOLTAGE_V)
+        .context("clear latched bus overvoltage condition")?;
+    thread::sleep(ALERT_LATCH_OBSERVATION_DELAY);
+    require_alert_level(alert, false, "latched ALERT persistence")?;
+
+    let flags = ina
+        .take_diagnostic_flags()
+        .context("acknowledge latched ALERT")?;
+    require(
+        flags.bus_over_limit,
+        "latched bus overvoltage flag did not persist until acknowledgement",
+    )?;
+    wait_for_alert_level(alert, true, "latched ALERT acknowledgement")?;
+    ina.configure_alerts(AlertConfig::default())
+        .context("restore transparent ALERT mode")
+}
+
+pub(crate) fn alert_conversion_ready<I2C, ALERT>(
+    ina: &mut Ina228<I2C>,
+    alert: &mut ALERT,
+) -> TestResult
+where
+    I2C: I2c,
+    I2C::Error: Debug,
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    prepare_alert_fixture(ina)?;
+    ina.configure(fast_config(OperatingMode::Shutdown, AveragingCount::N1))
+        .context("enter shutdown before conversion-ready ALERT test")?;
+    ina.configure_alerts(AlertConfig {
+        conversion_ready: true,
+        ..AlertConfig::default()
+    })
+    .context("enable conversion-ready ALERT")?;
+    wait_for_alert_level(alert, true, "conversion-ready ALERT idle state")?;
+
+    ina.configure(fast_config(OperatingMode::TriggeredAll, AveragingCount::N1))
+        .context("start triggered conversion for ALERT")?;
+    wait_for_alert_level(alert, false, "conversion-ready ALERT assertion")?;
+    let flags = ina
+        .take_diagnostic_flags()
+        .context("acknowledge conversion-ready ALERT")?;
+    require(
+        flags.conversion_ready,
+        "ALERT asserted without the conversion-ready flag",
+    )?;
+    wait_for_alert_level(alert, true, "conversion-ready ALERT acknowledgement")?;
+    ina.configure_alerts(AlertConfig::default())
+        .context("disable conversion-ready ALERT")
+}
+
+pub(crate) fn alert_threshold_flags<I2C>(ina: &mut Ina228<I2C>) -> TestResult
 where
     I2C: I2c,
     I2C::Error: Debug,
 {
-    prepare_measurements(ina, AdcRange::Range40mV)?;
-    let baseline = read_measurements(ina)?;
-    require(
-        baseline.bus_voltage_v >= MIN_FIXTURE_BUS_VOLTAGE_V,
-        format!(
-            "bus voltage {} V is below the {MIN_FIXTURE_BUS_VOLTAGE_V} V fixture minimum",
-            baseline.bus_voltage_v
-        ),
-    )?;
-    require(
-        baseline.power_w >= MIN_FIXTURE_POWER_W,
-        format!(
-            "power {} W is below the {MIN_FIXTURE_POWER_W} W fixture minimum",
-            baseline.power_w
-        ),
-    )?;
-
-    set_safe_limits(ina)?;
-    let alert_config = AlertConfig {
-        latch: true,
-        active_high: true,
-        conversion_ready: true,
-        slow_alert: true,
-    };
+    prepare_alert_fixture(ina)?;
+    let alert_config = AlertConfig::default();
 
     ina.configure_alerts(alert_config)
-        .context("configure all alert control bits")?;
+        .context("configure transparent alert flags")?;
     ina.set_shunt_overvoltage_limit(-ALERT_SHUNT_LIMIT_V)
         .context("set triggering shunt overvoltage limit")?;
     let flags = fresh_alert_flags(ina)?;
@@ -651,6 +720,44 @@ where
     Ok(())
 }
 
+fn alert_transparent_polarity<I2C, ALERT>(
+    ina: &mut Ina228<I2C>,
+    alert: &mut ALERT,
+    active_high: bool,
+) -> TestResult
+where
+    I2C: I2c,
+    I2C::Error: Debug,
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    prepare_alert_fixture(ina)?;
+    ina.configure_alerts(AlertConfig {
+        active_high,
+        ..AlertConfig::default()
+    })
+    .context("configure transparent ALERT polarity")?;
+
+    wait_for_alert_level(alert, !active_high, "transparent ALERT idle state")?;
+    ina.set_bus_overvoltage_limit(0.0)
+        .context("trigger transparent bus overvoltage alert")?;
+    wait_for_alert_level(alert, active_high, "transparent ALERT assertion")?;
+    ina.set_bus_overvoltage_limit(MAX_BUS_VOLTAGE_V)
+        .context("clear transparent bus overvoltage condition")?;
+    wait_for_alert_level(alert, !active_high, "transparent ALERT clearing")?;
+
+    let flags = ina
+        .take_diagnostic_flags()
+        .context("read cleared transparent ALERT flags")?;
+    require(
+        !flags.bus_over_limit,
+        "transparent bus overvoltage flag remained set after the condition cleared",
+    )?;
+    ina.configure_alerts(AlertConfig::default())
+        .context("restore default ALERT polarity")?;
+    wait_for_alert_level(alert, true, "restored ALERT idle state")
+}
+
 fn reset_device<I2C>(ina: &mut Ina228<I2C>) -> TestResult
 where
     I2C: I2c,
@@ -674,6 +781,68 @@ where
         .context("calibrate current and power")?;
     let flags = wait_for_conversion(ina)?;
     validate_clean_diagnostics(flags)
+}
+
+fn prepare_alert_fixture<I2C>(ina: &mut Ina228<I2C>) -> TestResult
+where
+    I2C: I2c,
+    I2C::Error: Debug,
+{
+    prepare_measurements(ina, AdcRange::Range40mV)?;
+    let baseline = read_measurements(ina)?;
+    require(
+        baseline.bus_voltage_v >= MIN_FIXTURE_BUS_VOLTAGE_V,
+        format!(
+            "bus voltage {} V is below the {MIN_FIXTURE_BUS_VOLTAGE_V} V fixture minimum",
+            baseline.bus_voltage_v
+        ),
+    )?;
+    require(
+        baseline.power_w >= MIN_FIXTURE_POWER_W,
+        format!(
+            "power {} W is below the {MIN_FIXTURE_POWER_W} W fixture minimum",
+            baseline.power_w
+        ),
+    )?;
+    set_safe_limits(ina)?;
+    ina.configure_alerts(AlertConfig::default())
+        .context("clear and restore default ALERT configuration")
+}
+
+fn wait_for_alert_level<ALERT>(alert: &mut ALERT, expected_high: bool, case: &str) -> TestResult
+where
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    let started = Instant::now();
+    while started.elapsed() < CONVERSION_TIMEOUT {
+        if alert.is_high().context("read ALERT GPIO")? == expected_high {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    let observed_high = alert.is_high().context("read ALERT GPIO after timeout")?;
+    let expected = if expected_high { "high" } else { "low" };
+    let observed = if observed_high { "high" } else { "low" };
+    Err(format!(
+        "{case}: ALERT remained {observed}, expected {expected} within {} ms",
+        CONVERSION_TIMEOUT.as_millis()
+    ))
+}
+
+fn require_alert_level<ALERT>(alert: &mut ALERT, expected_high: bool, case: &str) -> TestResult
+where
+    ALERT: InputPin,
+    ALERT::Error: Debug,
+{
+    let observed_high = alert.is_high().context("read ALERT GPIO")?;
+    let expected = if expected_high { "high" } else { "low" };
+    let observed = if observed_high { "high" } else { "low" };
+    require(
+        observed_high == expected_high,
+        format!("{case}: ALERT was {observed}, expected {expected}"),
+    )
 }
 
 fn wait_for_conversion<I2C>(ina: &mut Ina228<I2C>) -> TestResult<DiagnosticFlags>

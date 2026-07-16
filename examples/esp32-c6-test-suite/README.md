@@ -6,6 +6,8 @@ This firmware exercises the complete public INA228 driver API against a real dev
 
 - ESP32-C6 GPIO8 to INA228 SDA
 - ESP32-C6 GPIO9 to INA228 SCL
+- ESP32-C6 GPIO7 to INA228 ALERT
+- A 4.7 kΩ to 10 kΩ pull-up from ALERT to the ESP32-C6 3.3 V rail
 - Common ground and a valid INA228 supply
 - INA228 A0 and A1 tied to ground for I2C address `0x40`
 - A 2 mΩ shunt installed in the positive current direction
@@ -14,6 +16,8 @@ This firmware exercises the complete public INA228 driver API against a real dev
 - A steady positive-direction load above 0.05 W
 
 The last two requirements provide real stimulus for the bus-voltage and power-alert checks. Change the fixture constants at the top of `src/suite/cases.rs` if the board uses a different shunt or current range.
+
+The suite validates ALERT active-low and active-high polarity, transparent and latched behavior, acknowledgement, and conversion-ready assertion on GPIO7. Slow-alert timing is reported as skipped because the steady fixture has no controllable transient source; its control-bit encoding remains covered by the host-side `configure_alerts_encodes_each_control_bit` test.
 
 ## Run
 
@@ -24,4 +28,4 @@ cd examples/esp32-c6-test-suite
 cargo run --release
 ```
 
-The monitor ends with a summary such as `11 passed, 0 failed`. Any failure includes the operation, measured value, and expected invariant. The firmware panics after the summary if one or more phases failed, which makes the result visible to automated serial-log runners.
+The monitor ends with a summary such as `15 passed, 0 failed, 1 skipped`. Any failure includes the operation, measured value, and expected invariant. The firmware panics after the summary if one or more phases failed, which makes the result visible to automated serial-log runners.
