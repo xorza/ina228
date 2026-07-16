@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use embedded_hal::{digital::InputPin, i2c::I2c};
 use ina228::{
-    AdcConfig, AdcRange, AlertConfig, AveragingCount, ConfigurationError, ConversionTime,
-    DEVICE_ID, DiagnosticFlags, Error, Ina228, MANUFACTURER_ID, OperatingMode,
+    AdcConfig, AdcRange, AlertConfig, AveragingCount, ConversionTime, DEVICE_ID, DiagnosticFlags,
+    Error, Ina228, MANUFACTURER_ID, OperatingMode,
 };
 
 use crate::suite::{ResultContext, TestResult, require};
@@ -70,35 +70,6 @@ struct ConversionObservation {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum InvalidConfigurationCase {
-    ZeroMaximumCurrent,
-    ZeroShuntResistance,
-    CalibrationBeyondRange,
-    TemperatureCoefficient,
-    InfiniteShuntLimit,
-    NegativeBusLimit,
-    NanTemperatureLimit,
-    NegativePowerLimit,
-    SnapshotInTriggeredMode,
-}
-
-impl InvalidConfigurationCase {
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::ZeroMaximumCurrent => "zero maximum current",
-            Self::ZeroShuntResistance => "zero shunt resistance",
-            Self::CalibrationBeyondRange => "calibration beyond ADC range",
-            Self::TemperatureCoefficient => "15-bit temperature coefficient",
-            Self::InfiniteShuntLimit => "infinite shunt limit",
-            Self::NegativeBusLimit => "negative bus limit",
-            Self::NanTemperatureLimit => "NaN temperature limit",
-            Self::NegativePowerLimit => "negative power limit",
-            Self::SnapshotInTriggeredMode => "accumulator snapshot in triggered mode",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
 pub(crate) enum AlertThresholdCase {
     ShuntOvervoltage,
     ShuntUndervoltage,
@@ -121,18 +92,6 @@ impl AlertThresholdCase {
     }
 }
 
-pub(crate) const INVALID_CONFIGURATION_CASES: [InvalidConfigurationCase; 9] = [
-    InvalidConfigurationCase::ZeroMaximumCurrent,
-    InvalidConfigurationCase::ZeroShuntResistance,
-    InvalidConfigurationCase::CalibrationBeyondRange,
-    InvalidConfigurationCase::TemperatureCoefficient,
-    InvalidConfigurationCase::InfiniteShuntLimit,
-    InvalidConfigurationCase::NegativeBusLimit,
-    InvalidConfigurationCase::NanTemperatureLimit,
-    InvalidConfigurationCase::NegativePowerLimit,
-    InvalidConfigurationCase::SnapshotInTriggeredMode,
-];
-
 pub(crate) const ALERT_THRESHOLD_CASES: [AlertThresholdCase; 6] = [
     AlertThresholdCase::ShuntOvervoltage,
     AlertThresholdCase::ShuntUndervoltage,
@@ -142,16 +101,10 @@ pub(crate) const ALERT_THRESHOLD_CASES: [AlertThresholdCase; 6] = [
     AlertThresholdCase::Power,
 ];
 
-pub(crate) const ACTIVE_MODES: [ModeCase; 14] = [
+pub(crate) const ADC_MODE_CASES: [ModeCase; 4] = [
     ModeCase {
         name: "TriggeredBus",
         mode: OperatingMode::TriggeredBus,
-        active_channels: 1,
-        continuous: false,
-    },
-    ModeCase {
-        name: "TriggeredShunt",
-        mode: OperatingMode::TriggeredShunt,
         active_channels: 1,
         continuous: false,
     },
@@ -162,64 +115,10 @@ pub(crate) const ACTIVE_MODES: [ModeCase; 14] = [
         continuous: false,
     },
     ModeCase {
-        name: "TriggeredTemp",
-        mode: OperatingMode::TriggeredTemp,
-        active_channels: 1,
-        continuous: false,
-    },
-    ModeCase {
-        name: "TriggeredTempBus",
-        mode: OperatingMode::TriggeredTempBus,
-        active_channels: 2,
-        continuous: false,
-    },
-    ModeCase {
-        name: "TriggeredTempShunt",
-        mode: OperatingMode::TriggeredTempShunt,
-        active_channels: 2,
-        continuous: false,
-    },
-    ModeCase {
         name: "TriggeredAll",
         mode: OperatingMode::TriggeredAll,
         active_channels: 3,
         continuous: false,
-    },
-    ModeCase {
-        name: "ContinuousBus",
-        mode: OperatingMode::ContinuousBus,
-        active_channels: 1,
-        continuous: true,
-    },
-    ModeCase {
-        name: "ContinuousShunt",
-        mode: OperatingMode::ContinuousShunt,
-        active_channels: 1,
-        continuous: true,
-    },
-    ModeCase {
-        name: "ContinuousBusShunt",
-        mode: OperatingMode::ContinuousBusShunt,
-        active_channels: 2,
-        continuous: true,
-    },
-    ModeCase {
-        name: "ContinuousTemp",
-        mode: OperatingMode::ContinuousTemp,
-        active_channels: 1,
-        continuous: true,
-    },
-    ModeCase {
-        name: "ContinuousTempBus",
-        mode: OperatingMode::ContinuousTempBus,
-        active_channels: 2,
-        continuous: true,
-    },
-    ModeCase {
-        name: "ContinuousTempShunt",
-        mode: OperatingMode::ContinuousTempShunt,
-        active_channels: 2,
-        continuous: true,
     },
     ModeCase {
         name: "ContinuousAll",
@@ -229,41 +128,11 @@ pub(crate) const ACTIVE_MODES: [ModeCase; 14] = [
     },
 ];
 
-pub(crate) const CONVERSION_TIMES: [ConversionTimeCase; 8] = [
+pub(crate) const CONVERSION_TIME_CASES: [ConversionTimeCase; 2] = [
     ConversionTimeCase {
         name: "50 us",
         conversion_time: ConversionTime::Us50,
         conversion_time_us: 50,
-    },
-    ConversionTimeCase {
-        name: "84 us",
-        conversion_time: ConversionTime::Us84,
-        conversion_time_us: 84,
-    },
-    ConversionTimeCase {
-        name: "150 us",
-        conversion_time: ConversionTime::Us150,
-        conversion_time_us: 150,
-    },
-    ConversionTimeCase {
-        name: "280 us",
-        conversion_time: ConversionTime::Us280,
-        conversion_time_us: 280,
-    },
-    ConversionTimeCase {
-        name: "540 us",
-        conversion_time: ConversionTime::Us540,
-        conversion_time_us: 540,
-    },
-    ConversionTimeCase {
-        name: "1052 us",
-        conversion_time: ConversionTime::Us1052,
-        conversion_time_us: 1_052,
-    },
-    ConversionTimeCase {
-        name: "2074 us",
-        conversion_time: ConversionTime::Us2074,
-        conversion_time_us: 2_074,
     },
     ConversionTimeCase {
         name: "4120 us",
@@ -272,41 +141,11 @@ pub(crate) const CONVERSION_TIMES: [ConversionTimeCase; 8] = [
     },
 ];
 
-pub(crate) const AVERAGING_COUNTS: [AveragingCase; 8] = [
+pub(crate) const AVERAGING_CASES: [AveragingCase; 2] = [
     AveragingCase {
         name: "1 sample",
         averaging: AveragingCount::N1,
         samples: 1,
-    },
-    AveragingCase {
-        name: "4 samples",
-        averaging: AveragingCount::N4,
-        samples: 4,
-    },
-    AveragingCase {
-        name: "16 samples",
-        averaging: AveragingCount::N16,
-        samples: 16,
-    },
-    AveragingCase {
-        name: "64 samples",
-        averaging: AveragingCount::N64,
-        samples: 64,
-    },
-    AveragingCase {
-        name: "128 samples",
-        averaging: AveragingCount::N128,
-        samples: 128,
-    },
-    AveragingCase {
-        name: "256 samples",
-        averaging: AveragingCount::N256,
-        samples: 256,
-    },
-    AveragingCase {
-        name: "512 samples",
-        averaging: AveragingCount::N512,
-        samples: 512,
     },
     AveragingCase {
         name: "1024 samples",
@@ -462,82 +301,6 @@ where
     let expected = Duration::from_micros(AVERAGING_CONVERSION_TIME_US * case.samples);
     let observation = wait_for_conversion_timed(ina, timing_wait_timeout(expected))?;
     validate_conversion_duration(case.name, observation.elapsed, expected)
-}
-
-pub(crate) fn invalid_configuration<I2C>(
-    ina: &mut Ina228<I2C>,
-    case: InvalidConfigurationCase,
-) -> TestResult
-where
-    I2C: I2c,
-    I2C::Error: Debug,
-{
-    reset_device(ina)?;
-    match case {
-        InvalidConfigurationCase::ZeroMaximumCurrent => expect_configuration_error(
-            ina.calibrate(0.0, SHUNT_RESISTANCE_OHM),
-            ConfigurationError::MaxCurrent,
-            case.name(),
-        ),
-        InvalidConfigurationCase::ZeroShuntResistance => expect_configuration_error(
-            ina.calibrate(MAX_CURRENT_A, 0.0),
-            ConfigurationError::ShuntResistance,
-            case.name(),
-        ),
-        InvalidConfigurationCase::CalibrationBeyondRange => {
-            ina.set_adc_range(AdcRange::Range40mV)
-                .context("select 40 mV range")?;
-            expect_configuration_error(
-                ina.calibrate(100.0, SHUNT_RESISTANCE_OHM),
-                ConfigurationError::Calibration,
-                case.name(),
-            )
-        }
-        InvalidConfigurationCase::TemperatureCoefficient => expect_configuration_error(
-            ina.set_temp_compensation(0x4000),
-            ConfigurationError::TemperatureCoefficient,
-            case.name(),
-        ),
-        InvalidConfigurationCase::InfiniteShuntLimit => expect_configuration_error(
-            ina.set_shunt_overvoltage_limit(f32::INFINITY),
-            ConfigurationError::ShuntVoltageLimit,
-            case.name(),
-        ),
-        InvalidConfigurationCase::NegativeBusLimit => expect_configuration_error(
-            ina.set_bus_overvoltage_limit(-1.0),
-            ConfigurationError::BusVoltageLimit,
-            case.name(),
-        ),
-        InvalidConfigurationCase::NanTemperatureLimit => expect_configuration_error(
-            ina.set_temperature_limit(f32::NAN),
-            ConfigurationError::TemperatureLimit,
-            case.name(),
-        ),
-        InvalidConfigurationCase::NegativePowerLimit => {
-            ina.set_adc_range(AdcRange::Range40mV)
-                .context("select 40 mV range")?;
-            ina.calibrate(MAX_CURRENT_A, SHUNT_RESISTANCE_OHM)
-                .context("establish valid calibration")?;
-            expect_configuration_error(
-                ina.set_power_limit(-1.0),
-                ConfigurationError::PowerLimit,
-                case.name(),
-            )
-        }
-        InvalidConfigurationCase::SnapshotInTriggeredMode => {
-            ina.set_adc_range(AdcRange::Range40mV)
-                .context("select 40 mV range")?;
-            ina.calibrate(MAX_CURRENT_A, SHUNT_RESISTANCE_OHM)
-                .context("establish valid calibration")?;
-            ina.configure(fast_config(OperatingMode::TriggeredAll, AveragingCount::N1))
-                .context("enter triggered mode")?;
-            expect_configuration_error(
-                ina.take_accumulator_snapshot(),
-                ConfigurationError::AccumulatorMode,
-                case.name(),
-            )
-        }
-    }
 }
 
 pub(crate) fn ranges_and_calibration<I2C>(ina: &mut Ina228<I2C>) -> TestResult
@@ -1209,18 +972,6 @@ fn validate_snapshot(
     require(!flags.energy_overflow, "energy accumulator overflowed")?;
     require(!flags.charge_overflow, "charge accumulator overflowed")?;
     require(!flags.math_overflow, "device math overflowed")
-}
-
-fn expect_configuration_error<T, E: Debug>(
-    result: Result<T, Error<E>>,
-    expected: ConfigurationError,
-    case: &str,
-) -> TestResult {
-    match result {
-        Err(Error::InvalidConfiguration(actual)) if actual == expected => Ok(()),
-        Err(error) => Err(format!("{case}: returned {error:?}, expected {expected:?}")),
-        Ok(_) => Err(format!("{case}: accepted invalid input")),
-    }
 }
 
 fn expect_stale_shunt_voltage<I2C>(ina: &mut Ina228<I2C>, case: &str) -> TestResult

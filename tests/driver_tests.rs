@@ -239,37 +239,103 @@ fn reset_write_failure_invalidates_scale_state_until_recovery() {
 }
 
 #[test]
-fn configure_default_and_64_sample_average() {
-    // Reset fields encode 0xFB68; changing AVG from N1=0 to N64=3 encodes 0xFB6B.
-    let default = 0xFB68;
-    let averaged = 0xFB6B;
-    assert_ne!(default, averaged);
+fn configure_encodes_every_adc_enum_variant() {
+    let mode_cases = [
+        (OperatingMode::Shutdown, 0x0),
+        (OperatingMode::TriggeredBus, 0x1),
+        (OperatingMode::TriggeredShunt, 0x2),
+        (OperatingMode::TriggeredBusShunt, 0x3),
+        (OperatingMode::TriggeredTemp, 0x4),
+        (OperatingMode::TriggeredTempBus, 0x5),
+        (OperatingMode::TriggeredTempShunt, 0x6),
+        (OperatingMode::TriggeredAll, 0x7),
+        (OperatingMode::ContinuousBus, 0x9),
+        (OperatingMode::ContinuousShunt, 0xA),
+        (OperatingMode::ContinuousBusShunt, 0xB),
+        (OperatingMode::ContinuousTemp, 0xC),
+        (OperatingMode::ContinuousTempBus, 0xD),
+        (OperatingMode::ContinuousTempShunt, 0xE),
+        (OperatingMode::ContinuousAll, 0xF),
+    ];
+    let conversion_time_cases = [
+        (ConversionTime::Us50, 0),
+        (ConversionTime::Us84, 1),
+        (ConversionTime::Us150, 2),
+        (ConversionTime::Us280, 3),
+        (ConversionTime::Us540, 4),
+        (ConversionTime::Us1052, 5),
+        (ConversionTime::Us2074, 6),
+        (ConversionTime::Us4120, 7),
+    ];
+    let averaging_cases = [
+        (AveragingCount::N1, 0),
+        (AveragingCount::N4, 1),
+        (AveragingCount::N16, 2),
+        (AveragingCount::N64, 3),
+        (AveragingCount::N128, 4),
+        (AveragingCount::N256, 5),
+        (AveragingCount::N512, 6),
+        (AveragingCount::N1024, 7),
+    ];
 
-    let i2c = mock(&[write_txn(0x01, default), write_txn(0x01, averaged)]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.configure(AdcConfig::default()).unwrap();
-    ina.configure(AdcConfig {
-        averaging: AveragingCount::N64,
-        ..Default::default()
-    })
-    .unwrap();
-    ina.release().done();
-}
+    let mut transactions = Vec::new();
+    for &(_, encoded) in &mode_cases {
+        transactions.push(write_txn(
+            0x01,
+            (DEFAULT_ADC_CONFIG & !0xF000) | (encoded << 12),
+        ));
+    }
+    for &(_, encoded) in &conversion_time_cases {
+        transactions.push(write_txn(
+            0x01,
+            (DEFAULT_ADC_CONFIG & !(0x7 << 9)) | (encoded << 9),
+        ));
+        transactions.push(write_txn(
+            0x01,
+            (DEFAULT_ADC_CONFIG & !(0x7 << 6)) | (encoded << 6),
+        ));
+        transactions.push(write_txn(
+            0x01,
+            (DEFAULT_ADC_CONFIG & !(0x7 << 3)) | (encoded << 3),
+        ));
+    }
+    for &(_, encoded) in &averaging_cases {
+        transactions.push(write_txn(0x01, (DEFAULT_ADC_CONFIG & !0x7) | encoded));
+    }
 
-#[test]
-fn configure_triggered_shunt_fast() {
-    // MODE=0x2(12), VBUSCT=0(9), VSHUNTCT=0(6), TEMPCT=0(3), AVG=0(0)
-    let expected = 0x2 << 12;
-    let i2c = mock(&[write_txn(0x01, expected)]);
+    let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    ina.configure(AdcConfig {
-        mode: OperatingMode::TriggeredShunt,
-        bus_conversion_time: ConversionTime::Us50,
-        shunt_conversion_time: ConversionTime::Us50,
-        temperature_conversion_time: ConversionTime::Us50,
-        averaging: AveragingCount::N1,
-    })
-    .unwrap();
+    for &(mode, _) in &mode_cases {
+        ina.configure(AdcConfig {
+            mode,
+            ..AdcConfig::default()
+        })
+        .unwrap();
+    }
+    for &(conversion_time, _) in &conversion_time_cases {
+        ina.configure(AdcConfig {
+            bus_conversion_time: conversion_time,
+            ..AdcConfig::default()
+        })
+        .unwrap();
+        ina.configure(AdcConfig {
+            shunt_conversion_time: conversion_time,
+            ..AdcConfig::default()
+        })
+        .unwrap();
+        ina.configure(AdcConfig {
+            temperature_conversion_time: conversion_time,
+            ..AdcConfig::default()
+        })
+        .unwrap();
+    }
+    for &(averaging, _) in &averaging_cases {
+        ina.configure(AdcConfig {
+            averaging,
+            ..AdcConfig::default()
+        })
+        .unwrap();
+    }
     ina.release().done();
 }
 

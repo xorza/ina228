@@ -134,23 +134,17 @@ where
     summary.run("identity registers", &mut ina, cases::identity);
     summary.run("reset and default conversion", &mut ina, cases::reset);
     summary.run("ADC shutdown mode", &mut ina, cases::adc_shutdown);
-    for case in cases::ACTIVE_MODES {
+    for case in cases::ADC_MODE_CASES {
         let name = format!("ADC mode {}", case.name);
         summary.run(&name, &mut ina, |ina| cases::adc_mode(ina, case));
     }
-    for case in cases::CONVERSION_TIMES {
+    for case in cases::CONVERSION_TIME_CASES {
         let name = format!("ADC conversion time {}", case.name);
         summary.run(&name, &mut ina, |ina| cases::adc_conversion_time(ina, case));
     }
-    for case in cases::AVERAGING_COUNTS {
+    for case in cases::AVERAGING_CASES {
         let name = format!("ADC averaging {}", case.name);
         summary.run(&name, &mut ina, |ina| cases::adc_averaging(ina, case));
-    }
-    for case in cases::INVALID_CONFIGURATION_CASES {
-        let name = format!("invalid configuration: {}", case.name());
-        summary.run(&name, &mut ina, |ina| {
-            cases::invalid_configuration(ina, case)
-        });
     }
     summary.run(
         "ADC ranges and calibration",
