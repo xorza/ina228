@@ -23,7 +23,14 @@ The suite validates ALERT active-low and active-high polarity, transparent and l
 
 ## Run
 
-Install the ESP-IDF Rust prerequisites and connect the ESP32-C6 over USB, then run:
+Install the ESP-IDF Rust prerequisites with `espup`, including its libclang symlink:
+
+```sh
+cargo install espup
+espup install --std --targets esp32c6
+```
+
+Connect the ESP32-C6 over USB, then run:
 
 ```sh
 cd examples/esp32-c6-test-suite

@@ -13,3 +13,4 @@ build-std = ["std", "panic_abort"]
 MCU = "esp32c6"
 ESP_IDF_VERSION = "v5.5.4"
 ESP_IDF_TOOLS_INSTALL_DIR = "global"
+ESP_IDF_ESPUP_CLANG_SYMLINK = "err"
