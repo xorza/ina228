@@ -133,16 +133,25 @@ where
 
     summary.run("identity registers", &mut ina, cases::identity);
     summary.run("reset and default conversion", &mut ina, cases::reset);
-    summary.run(
-        "ADC modes, conversion times, and averaging",
-        &mut ina,
-        cases::adc_configuration,
-    );
-    summary.run(
-        "invalid configuration errors",
-        &mut ina,
-        cases::invalid_configuration,
-    );
+    summary.run("ADC shutdown mode", &mut ina, cases::adc_shutdown);
+    for case in cases::ACTIVE_MODES {
+        let name = format!("ADC mode {}", case.name);
+        summary.run(&name, &mut ina, |ina| cases::adc_mode(ina, case));
+    }
+    for case in cases::CONVERSION_TIMES {
+        let name = format!("ADC conversion time {}", case.name);
+        summary.run(&name, &mut ina, |ina| cases::adc_conversion_time(ina, case));
+    }
+    for case in cases::AVERAGING_COUNTS {
+        let name = format!("ADC averaging {}", case.name);
+        summary.run(&name, &mut ina, |ina| cases::adc_averaging(ina, case));
+    }
+    for case in cases::INVALID_CONFIGURATION_CASES {
+        let name = format!("invalid configuration: {}", case.name());
+        summary.run(&name, &mut ina, |ina| {
+            cases::invalid_configuration(ina, case)
+        });
+    }
     summary.run(
         "ADC ranges and calibration",
         &mut ina,
@@ -174,11 +183,10 @@ where
         "ALERT pin slow-alert timing",
         "fixture has no controllable transient; control-bit encoding is covered by host tests",
     );
-    summary.run(
-        "alert threshold status flags",
-        &mut ina,
-        cases::alert_threshold_flags,
-    );
+    for case in cases::ALERT_THRESHOLD_CASES {
+        let name = format!("alert threshold flag: {}", case.name());
+        summary.run(&name, &mut ina, |ina| cases::alert_threshold(ina, case));
+    }
 
     let _i2c = ina.release();
     summary.record("release returns the I2C bus", Ok(()));

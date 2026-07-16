@@ -2,6 +2,8 @@
 
 This firmware exercises the complete public INA228 driver API against a real device and prints a pass/fail result for each phase. It continues after ordinary test failures so the final summary shows every independent phase that could run.
 
+ADC modes are validated from their measured conversion duration and recurrence: one-, two-, and three-channel modes have distinct completion windows, continuous modes must produce a second conversion, and triggered modes must remain idle after their first conversion. Conversion-time and averaging encodings are measured independently with amplified test configurations so adjacent enum values cannot share the same timing window.
+
 ## Fixture
 
 - ESP32-C6 GPIO8 to INA228 SDA
@@ -28,4 +30,4 @@ cd examples/esp32-c6-test-suite
 cargo run --release
 ```
 
-The monitor ends with a summary such as `15 passed, 0 failed, 1 skipped`. Any failure includes the operation, measured value, and expected invariant. The firmware panics after the summary if one or more phases failed, which makes the result visible to automated serial-log runners.
+The monitor ends with a summary such as `58 passed, 0 failed, 1 skipped`. ADC modes, conversion times, averaging counts, invalid-input cases, and alert thresholds each receive their own result and device preparation boundary, so an early failure does not suppress later cases. Any failure includes the operation, measured value, and expected invariant. The firmware panics after the summary if one or more phases failed, which makes the result visible to automated serial-log runners.
