@@ -1,6 +1,7 @@
 #![no_std]
 
 mod registers;
+mod scale;
 
 use embedded_hal::i2c::I2c;
 use registers::{Register, adc_config, config, diagnostic_alert};
@@ -73,8 +74,8 @@ pub enum InitializationError<I2C: I2c> {
 
 #[derive(Debug, Clone, Copy)]
 struct Calibration {
-    current_lsb: f32,
-    shunt_resistance_ohm: f32,
+    current_lsb: f64,
+    shunt_resistance_ohm: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,48 +85,42 @@ struct SuspendedConversions {
 }
 
 impl Calibration {
-    const CURRENT_ADC_COUNTS: f32 = 524_288.0;
-    const POWER_LSB_MULTIPLIER: f64 = 3.2;
-
     fn shunt_cal(self, adc_range: AdcRange) -> Result<u16, ConfigurationError> {
-        let max_shunt_voltage = self.current_lsb as f64
-            * Self::CURRENT_ADC_COUNTS as f64
-            * self.shunt_resistance_ohm as f64;
+        let max_shunt_voltage =
+            self.current_lsb * scale::SIGNED_20_BIT_FULL_SCALE * self.shunt_resistance_ohm;
         if !max_shunt_voltage.is_finite() || max_shunt_voltage >= adc_range.full_scale_voltage() {
             return Err(ConfigurationError::Calibration);
         }
 
-        let shunt_cal = 13107.2e6
-            * self.current_lsb as f64
-            * self.shunt_resistance_ohm as f64
-            * adc_range.shunt_cal_multiplier();
-
-        let shunt_cal = shunt_cal + 0.5;
-        if !shunt_cal.is_finite() || !(1.0..32768.0).contains(&shunt_cal) {
+        let shunt_cal =
+            adc_range.shunt_cal_scale() * self.current_lsb * self.shunt_resistance_ohm + 0.5;
+        // shunt_cal carries the rounding term, so the bound is one past the last code.
+        let max_code = scale::UNSIGNED_15_BIT_MAX as f64;
+        if !shunt_cal.is_finite() || !(1.0..max_code + 1.0).contains(&shunt_cal) {
             return Err(ConfigurationError::Calibration);
         }
         Ok(shunt_cal as u16)
     }
 
-    fn power_lsb(self) -> f32 {
-        Self::POWER_LSB_MULTIPLIER as f32 * self.current_lsb
+    fn power_lsb(self) -> f64 {
+        scale::POWER_LSB_MULTIPLIER * self.current_lsb
     }
 
     fn energy_lsb(self) -> f64 {
-        16.0 * Self::POWER_LSB_MULTIPLIER * self.current_lsb as f64
+        scale::ENERGY_LSB_MULTIPLIER * self.power_lsb()
     }
 }
 
 fn encode_signed(
     value: f32,
-    lsb: f32,
+    lsb: f64,
     error: ConfigurationError,
 ) -> Result<u16, ConfigurationError> {
     if !value.is_finite() {
         return Err(error);
     }
-    let raw = value / lsb;
-    if !raw.is_finite() || raw <= i16::MIN as f32 - 0.5 || raw >= i16::MAX as f32 + 0.5 {
+    let raw = value as f64 / lsb;
+    if !raw.is_finite() || raw <= i16::MIN as f64 - 0.5 || raw >= i16::MAX as f64 + 0.5 {
         return Err(error);
     }
     let rounded = if raw >= 0.0 { raw + 0.5 } else { raw - 0.5 };
@@ -134,15 +129,15 @@ fn encode_signed(
 
 fn encode_unsigned(
     value: f32,
-    lsb: f32,
+    lsb: f64,
     max_raw: u16,
     error: ConfigurationError,
 ) -> Result<u16, ConfigurationError> {
     if !value.is_finite() {
         return Err(error);
     }
-    let raw = value / lsb;
-    if !raw.is_finite() || raw < 0.0 || raw >= max_raw as f32 + 0.5 {
+    let raw = value as f64 / lsb;
+    if !raw.is_finite() || raw < 0.0 || raw >= max_raw as f64 + 0.5 {
         return Err(error);
     }
     Ok((raw + 0.5) as u16)
@@ -357,8 +352,8 @@ impl<I2C: I2c> Ina228<I2C> {
         }
 
         let calibration = Calibration {
-            current_lsb: max_current_a / Calibration::CURRENT_ADC_COUNTS,
-            shunt_resistance_ohm,
+            current_lsb: max_current_a as f64 / scale::SIGNED_20_BIT_FULL_SCALE,
+            shunt_resistance_ohm: shunt_resistance_ohm as f64,
         };
         let adc_range = self.adc_range;
         let shunt_cal = calibration
@@ -419,7 +414,7 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Returns bus voltage in Volts.
     pub fn bus_voltage(&mut self) -> Result<f32, Error<I2C::Error>> {
         let raw = self.read_u24(Register::Vbus)? >> 4;
-        Ok(raw as f32 * 195.3125e-6)
+        Ok(raw as f32 * scale::BUS_VOLTAGE_LSB)
     }
 
     /// Returns shunt voltage in Volts. LSB depends on the configured ADC range.
@@ -435,7 +430,7 @@ impl<I2C: I2c> Ina228<I2C> {
             .calibration
             .expect("call calibrate() before reading current");
         let raw = self.read_i20(Register::Current)?;
-        Ok(raw as f32 * calibration.current_lsb)
+        Ok((raw as f64 * calibration.current_lsb) as f32)
     }
 
     /// Returns power in Watts. Requires prior [`calibrate`](Self::calibrate) call.
@@ -444,7 +439,7 @@ impl<I2C: I2c> Ina228<I2C> {
             .calibration
             .expect("call calibrate() before reading power");
         let raw = self.read_u24(Register::Power)?;
-        Ok(raw as f32 * calibration.power_lsb())
+        Ok((raw as f64 * calibration.power_lsb()) as f32)
     }
 
     /// Takes a coherent energy, charge, and diagnostic snapshot.
@@ -476,7 +471,7 @@ impl<I2C: I2c> Ina228<I2C> {
         let charge_raw = self.read_i40(Register::Charge)?;
         let snapshot = AccumulatorSnapshot {
             energy_joules: energy_raw as f64 * calibration.energy_lsb(),
-            charge_coulombs: charge_raw as f64 * calibration.current_lsb as f64,
+            charge_coulombs: charge_raw as f64 * calibration.current_lsb,
             diagnostic_flags,
         };
         self.restore_conversions(suspended)?;
@@ -486,7 +481,7 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Returns die temperature in degrees Celsius.
     pub fn die_temperature(&mut self) -> Result<f32, Error<I2C::Error>> {
         let raw = self.read_u16(Register::DieTemp)? as i16;
-        Ok(raw as f32 * 7.8125e-3)
+        Ok(raw as f32 * scale::DIE_TEMPERATURE_LSB)
     }
 
     /// Resets the energy and charge accumulator registers and clears MATHOF.
@@ -537,7 +532,7 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn set_shunt_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(
             voltage_v,
-            self.adc_range.shunt_limit_lsb(),
+            self.adc_range.shunt_limit_lsb() as f64,
             ConfigurationError::ShuntVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -551,7 +546,7 @@ impl<I2C: I2c> Ina228<I2C> {
     ) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(
             voltage_v,
-            self.adc_range.shunt_limit_lsb(),
+            self.adc_range.shunt_limit_lsb() as f64,
             ConfigurationError::ShuntVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -562,8 +557,8 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn set_bus_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
         let raw = encode_unsigned(
             voltage_v,
-            3.125e-3,
-            0x7FFF,
+            scale::BUS_LIMIT_LSB as f64,
+            scale::UNSIGNED_15_BIT_MAX,
             ConfigurationError::BusVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -574,8 +569,8 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn set_bus_undervoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
         let raw = encode_unsigned(
             voltage_v,
-            3.125e-3,
-            0x7FFF,
+            scale::BUS_LIMIT_LSB as f64,
+            scale::UNSIGNED_15_BIT_MAX,
             ConfigurationError::BusVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -584,8 +579,12 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Set temperature over-limit in degrees Celsius.
     pub fn set_temperature_limit(&mut self, temp_c: f32) -> Result<(), Error<I2C::Error>> {
-        let raw = encode_signed(temp_c, 7.8125e-3, ConfigurationError::TemperatureLimit)
-            .map_err(Error::InvalidConfiguration)?;
+        let raw = encode_signed(
+            temp_c,
+            scale::DIE_TEMPERATURE_LSB as f64,
+            ConfigurationError::TemperatureLimit,
+        )
+        .map_err(Error::InvalidConfiguration)?;
         self.write_u16(Register::TempLimit, raw)
     }
 
@@ -596,7 +595,7 @@ impl<I2C: I2c> Ina228<I2C> {
             .expect("call calibrate() before setting power limit");
         let raw = encode_unsigned(
             power_w,
-            256.0 * calibration.power_lsb(),
+            scale::POWER_LIMIT_TRUNCATION * calibration.power_lsb(),
             u16::MAX,
             ConfigurationError::PowerLimit,
         )

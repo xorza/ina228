@@ -11,7 +11,7 @@ const SHUTDOWN_ADC_CONFIG: u16 = 0x0B68;
 const SHUTDOWN_ALT_ADC_CONFIG: u16 = 0x8B68;
 const ADC_MODE_MASK: u16 = 0xF000;
 
-/// Compute SHUNT_CAL the same way the driver does (f32 current_lsb, then f64 multiply).
+/// Compute SHUNT_CAL from the datasheet formula, independently of the driver's derivation.
 fn expected_shunt_cal(max_current: f32, shunt_ohm: f32, adc_range_40mv: bool) -> u16 {
     let current_lsb = max_current / 524_288.0_f32;
     let mut shunt_cal = 13107.2e6 * current_lsb as f64 * shunt_ohm as f64;
