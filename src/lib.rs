@@ -52,7 +52,7 @@ fn encode_unsigned(value: f32, lsb: f64, max_raw: u16) -> Result<u16, Configurat
 /// Measures bus and shunt voltage, current, power, energy, and charge over I2C. Valid
 /// addresses are `0x40..=0x4F`, set via the A0/A1 pins.
 ///
-/// Three rules hold for every method below and are not repeated on each one:
+/// Four rules hold for every method below and are not repeated on each one:
 ///
 /// - **Freshness.** Nothing here waits for a conversion. Output registers keep the last
 ///   completed result, so after a reset or any change of configuration, calibration, or
@@ -65,6 +65,9 @@ fn encode_unsigned(value: f32, lsb: f64, max_raw: u16) -> Result<u16, Configurat
 /// - **Fail-stop.** An I2C write error cannot prove whether the device accepted the value.
 ///   After one, recover with [`reset`](Self::reset) or a new driver before any further
 ///   scaled operation. Failed reads are retryable.
+/// - **Calibration.** Current, power, energy, charge, and the power limit all scale from
+///   [`calibrate`](Self::calibrate). Reaching for one of them first panics: the ordering
+///   is a bug in the calling code, not a condition to handle at runtime.
 #[derive(Debug)]
 pub struct Ina228<I2C> {
     i2c: I2C,
@@ -263,18 +266,14 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Returns current in Amps. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn current(&mut self) -> Result<f32, Error<I2C::Error>> {
-        let calibration = self
-            .calibration
-            .expect("call calibrate() before reading current");
+        let calibration = self.calibration();
         let raw = self.read_i20(Register::Current)?;
         Ok((raw as f64 * calibration.current_lsb()) as f32)
     }
 
     /// Returns power in Watts. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn power(&mut self) -> Result<f32, Error<I2C::Error>> {
-        let calibration = self
-            .calibration
-            .expect("call calibrate() before reading power");
+        let calibration = self.calibration();
         let raw = self.read_u24(Register::Power)?;
         Ok((raw as f64 * calibration.power_lsb()) as f32)
     }
@@ -295,9 +294,7 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn take_accumulator_snapshot(
         &mut self,
     ) -> Result<AccumulatorSnapshot, CaptureError<I2C::Error>> {
-        let calibration = self
-            .calibration
-            .expect("call calibrate() before reading accumulators");
+        let calibration = self.calibration();
         let adc_config = self.read_adc_config().map_err(Error::I2c)?;
         if !adc_config.accumulates() {
             return Err(Error::InvalidConfiguration(ConfigurationError::AccumulatorMode).into());
@@ -419,11 +416,9 @@ impl<I2C: I2c> Ina228<I2C> {
         )
     }
 
-    /// Set power over-limit in Watts.
+    /// Set power over-limit in Watts. Requires prior [`calibrate`](Self::calibrate) call.
     pub fn set_power_limit(&mut self, power_w: f32) -> Result<(), Error<I2C::Error>> {
-        let calibration = self
-            .calibration
-            .expect("call calibrate() before setting power limit");
+        let calibration = self.calibration();
         self.write_unsigned_limit(
             Register::PwrLimit,
             power_w,
@@ -471,6 +466,18 @@ impl<I2C: I2c> Ina228<I2C> {
     ) -> Result<(), Error<I2C::Error>> {
         let raw = encode_unsigned(value, lsb, max_raw).map_err(Error::InvalidConfiguration)?;
         Ok(self.write_u16(reg, raw)?)
+    }
+
+    /// The active calibration.
+    ///
+    /// # Panics
+    ///
+    /// If [`calibrate`](Self::calibrate) has not succeeded. Nothing can scale a raw count
+    /// into Amps or Watts without it, so calling a scaled operation first is a sequencing
+    /// bug rather than a runtime condition.
+    fn calibration(&self) -> Calibration {
+        self.calibration
+            .expect("call calibrate() before scaled operations")
     }
 
     /// Shunt ADC range currently programmed into CONFIG.

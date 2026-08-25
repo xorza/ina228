@@ -9,15 +9,6 @@ rewritten to fit whatever shape production takes.
 
 ---
 
-## Missing calibration is enforced by four hand-written panics
-
-- [ ] `.expect("call calibrate() before …")` is repeated with four different messages at
-      `src/lib.rs:268`, `277`, `300`, `426`. The precondition is a property of the driver's
-      state, restated once per consumer.
-- [ ] The crate is inconsistent about how misuse is reported: an out-of-range temperature
-      coefficient is `Error::InvalidConfiguration`, but reading `current()` uncalibrated
-      is a panic in release builds. Both are caller sequencing errors.
-
 ## `lib.rs` is still the driver's own file rather than the crate root
 
 Against the stated conventions in `CLAUDE.md`:
@@ -37,15 +28,15 @@ Against the stated conventions in `CLAUDE.md`:
 ## Bit state is expanded into wide, undocumented structs at the API boundary
 
 - [ ] `take_diagnostic_flags` decodes DIAG_ALRT into eleven `bool` fields with eleven
-      hand-written `d & MASK != 0` lines (`src/lib.rs:346-356`) — an 11-byte struct and
+      hand-written `d & MASK != 0` lines (`src/lib.rs:343-353`) — an 11-byte struct and
       eleven test-and-store sequences to carry two bytes of device state on an MCU target.
 - [ ] Ten of `DiagnosticFlags`'s eleven public fields are undocumented
-      (`src/lib.rs:99-111`); only `memory_ok` has a `///`. Two of
-      `AccumulatorSnapshot`'s three are undocumented (`src/lib.rs:118-119`). All variants
+      (`src/lib.rs:102-114`); only `memory_ok` has a `///`. Two of
+      `AccumulatorSnapshot`'s three are undocumented (`src/lib.rs:121-122`). All variants
       of `ConversionTime`, `AveragingCount`, and `OperatingMode` are undocumented
       (`src/registers.rs:127-175`) — `TriggeredTempBus` vs `TriggeredTempShunt` is not
       self-explaining. The crate has no `#![deny(missing_docs)]` to catch this.
-- [ ] The `AlertConfig` example is a ```` ```ignore ```` doctest (`src/lib.rs:82`) —
+- [ ] The `AlertConfig` example is a ```` ```ignore ```` doctest (`src/lib.rs:85`) —
       never compiled, free to rot.
 
 ## Error types cannot be used for anything but `Debug` printing
@@ -63,7 +54,7 @@ Against the stated conventions in `CLAUDE.md`:
 
 ## Read-back and identity gaps push work onto callers
 
-- [ ] `device_id` and `die_revision` (`src/lib.rs:441-448`) each issue a separate I2C read
+- [ ] `device_id` and `die_revision` (`src/lib.rs:436-443`) each issue a separate I2C read
       of the same register 0x3F; a caller wanting both pays two transactions for two
       halves of one word.
 - [ ] `MANUFACTURER_ID` and `DEVICE_ID` are exported but never used by the driver, so the
@@ -74,10 +65,10 @@ Against the stated conventions in `CLAUDE.md`:
       ADC_CONFIG as an `AdcConfig`, nor of the raw DIAG_ALRT word.
 - [ ] The only way to poll for conversion-ready is `take_diagnostic_flags`, which
       acknowledges every other latched threshold alert as a side effect
-      (`src/lib.rs:343`). The README's own polling loop demonstrates the hazard and warns
+      (`src/lib.rs:340`). The README's own polling loop demonstrates the hazard and warns
       about it in a comment rather than the API preventing it.
 - [ ] `set_adc_range` clobbers SOVL and SUVL to their extremes and never restores them
-      (`src/lib.rs:186-187`), discarding caller configuration the driver has enough
+      (`src/lib.rs:189-190`), discarding caller configuration the driver has enough
       information to rescale — both shunt limit LSBs are already known to `AdcRange`.
 - [ ] `configure` writes ADC_CONFIG (register 0x01) but is named for the CONFIG register
       (0x00) that it does not touch; the register actually called CONFIG is written by

@@ -169,7 +169,7 @@ fn reset() {
     ina.reset().unwrap();
     // bus_voltage should still work after reset (doesn't need calibration)
     assert_eq!(ina.bus_voltage().unwrap(), 0.0);
-    assert_panics_with("call calibrate() before reading current", || {
+    assert_panics_with("call calibrate() before scaled operations", || {
         let _ = ina.current();
     });
     ina.release().done();
@@ -419,16 +419,16 @@ fn calibration_required_operations_panic_before_i2c() {
     let i2c = mock(&[]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
 
-    assert_panics_with("call calibrate() before reading current", || {
+    assert_panics_with("call calibrate() before scaled operations", || {
         let _ = ina.current();
     });
-    assert_panics_with("call calibrate() before reading power", || {
+    assert_panics_with("call calibrate() before scaled operations", || {
         let _ = ina.power();
     });
-    assert_panics_with("call calibrate() before reading accumulators", || {
+    assert_panics_with("call calibrate() before scaled operations", || {
         let _ = ina.take_accumulator_snapshot();
     });
-    assert_panics_with("call calibrate() before setting power limit", || {
+    assert_panics_with("call calibrate() before scaled operations", || {
         let _ = ina.set_power_limit(1.0);
     });
 
