@@ -1,8 +1,9 @@
 use embedded_hal::i2c::ErrorKind;
 use embedded_hal_mock::eh1::i2c::{Mock, Transaction};
 use ina228::{
-    AdcConfig, AdcRange, AlertConfig, AveragingCount, ConfigurationError, ConversionTime,
-    DEFAULT_ADDRESS, Error as DriverError, Ina228, InitializationError, OperatingMode,
+    AdcConfig, AdcRange, AlertConfig, AveragingCount, CaptureError, ConfigurationError,
+    ConversionTime, DEFAULT_ADDRESS, Error as DriverError, Ina228, InitializationError,
+    OperatingMode,
 };
 
 const ADDR: u8 = DEFAULT_ADDRESS;
@@ -596,9 +597,9 @@ fn accumulator_snapshot_requires_continuous_mode() {
         } else {
             assert!(matches!(
                 result,
-                Err(DriverError::InvalidConfiguration(
+                Err(CaptureError::Failed(DriverError::InvalidConfiguration(
                     ConfigurationError::AccumulatorMode
-                ))
+                )))
             ));
         }
         ina.release().done();
@@ -622,7 +623,7 @@ fn accumulator_snapshot_propagates_capture_and_restore_failures() {
 
     assert!(matches!(
         ina.take_accumulator_snapshot(),
-        Err(DriverError::I2c(ErrorKind::Bus))
+        Err(CaptureError::Failed(DriverError::I2c(ErrorKind::Bus)))
     ));
     ina.release().done();
 
@@ -641,10 +642,17 @@ fn accumulator_snapshot_propagates_capture_and_restore_failures() {
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     ina.calibrate(10.0, 0.01).unwrap();
 
-    assert!(matches!(
-        ina.take_accumulator_snapshot(),
-        Err(DriverError::I2c(ErrorKind::Bus))
-    ));
+    match ina.take_accumulator_snapshot() {
+        Err(CaptureError::NotResumed { snapshot, error }) => {
+            assert_eq!(error, DriverError::I2c(ErrorKind::Bus));
+            // The reads completed and already consumed the device's flag state, so the
+            // capture is handed back rather than dropped with the restore error.
+            assert_eq!(snapshot.energy_joules, 0.0);
+            assert_eq!(snapshot.charge_coulombs, 0.0);
+            assert!(snapshot.diagnostic_flags.memory_ok);
+        }
+        other => panic!("expected NotResumed carrying the capture, got {other:?}"),
+    }
     ina.release().done();
 }
 

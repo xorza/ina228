@@ -14,7 +14,7 @@ use embedded_hal::i2c::I2c;
 use registers::{Register, diagnostic_alert};
 
 pub use adc_config::AdcConfig;
-pub use error::{ConfigurationError, Error, InitializationError};
+pub use error::{CaptureError, ConfigurationError, Error, InitializationError};
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
 /// Default I2C address (A0=GND, A1=GND).
@@ -23,6 +23,12 @@ pub const DEFAULT_ADDRESS: u8 = 0x40;
 pub const MANUFACTURER_ID: u16 = 0x5449;
 /// Device ID (upper 12 bits of register 0x3F; lower 4 bits are die revision).
 pub const DEVICE_ID: u16 = 0x228;
+
+/// Widens a `bits`-wide two's-complement value to a full `i64`.
+fn sign_extend(value: u64, bits: u32) -> i64 {
+    let shift = u64::BITS - bits;
+    ((value << shift) as i64) >> shift
+}
 
 fn encode_signed(value: f32, lsb: f64) -> Result<u16, ConfigurationError> {
     let raw = value as f64 / lsb;
@@ -157,7 +163,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Writes ADC_CONFIG: operating mode, per-channel conversion times, and averaging.
     pub fn configure(&mut self, config: AdcConfig) -> Result<(), Error<I2C::Error>> {
-        self.write_u16(Register::AdcConfig, AdcConfigWord::of(config).bits())
+        Ok(self.write_u16(Register::AdcConfig, AdcConfigWord::of(config).bits())?)
     }
 
     /// Sets the shunt ADC full-scale range, re-writing SHUNT_CAL if already calibrated.
@@ -283,27 +289,41 @@ impl<I2C: I2c> Ina228<I2C> {
     /// [`reset_accumulators`](Self::reset_accumulators) clears those — but it does consume
     /// flag state: DIAG_ALRT acknowledges conversion-ready and any latched alert, and
     /// ENERGY and CHARGE clear their overflow indicators. A capture that fails part-way
-    /// loses whichever of those its completed reads already took.
-    pub fn take_accumulator_snapshot(&mut self) -> Result<AccumulatorSnapshot, Error<I2C::Error>> {
+    /// loses whichever of those its completed reads already took; one that completes but
+    /// cannot resume conversions comes back through [`CaptureError::NotResumed`] with the
+    /// snapshot intact.
+    pub fn take_accumulator_snapshot(
+        &mut self,
+    ) -> Result<AccumulatorSnapshot, CaptureError<I2C::Error>> {
         let calibration = self
             .calibration
             .expect("call calibrate() before reading accumulators");
-        let adc_config = self.read_adc_config()?;
+        let adc_config = self.read_adc_config().map_err(Error::I2c)?;
         if !adc_config.accumulates() {
-            return Err(Error::InvalidConfiguration(
-                ConfigurationError::AccumulatorMode,
-            ));
+            return Err(Error::InvalidConfiguration(ConfigurationError::AccumulatorMode).into());
         }
-        self.with_conversions_suspended(adc_config, |driver| {
+        // The snapshot has to outlive a failed restore: its reads already consumed the
+        // device's flag state, so dropping it would lose those readings for good.
+        let mut captured = None;
+        let outcome = self.with_conversions_suspended(adc_config, |driver| {
             let diagnostic_flags = driver.take_diagnostic_flags()?;
             let energy_raw = driver.read_u40(Register::Energy)?;
             let charge_raw = driver.read_i40(Register::Charge)?;
-            Ok(AccumulatorSnapshot {
+            let snapshot = AccumulatorSnapshot {
                 energy_joules: energy_raw as f64 * calibration.energy_lsb(),
                 charge_coulombs: charge_raw as f64 * calibration.current_lsb(),
                 diagnostic_flags,
-            })
-        })
+            };
+            captured = Some(snapshot);
+            Ok(snapshot)
+        });
+        // `captured` is set only once the reads have all succeeded, so a snapshot beside
+        // an error can only mean the capture completed and the restore did not.
+        match (outcome, captured) {
+            (Ok(snapshot), _) => Ok(snapshot),
+            (Err(error), Some(snapshot)) => Err(CaptureError::NotResumed { snapshot, error }),
+            (Err(error), None) => Err(CaptureError::Failed(error)),
+        }
     }
 
     /// Returns die temperature in degrees Celsius.
@@ -314,7 +334,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Resets the energy and charge accumulator registers and clears MATHOF.
     pub fn reset_accumulators(&mut self) -> Result<(), Error<I2C::Error>> {
-        self.write_u16(Register::Config, self.config.accumulator_reset_command())
+        Ok(self.write_u16(Register::Config, self.config.accumulator_reset_command())?)
     }
 
     /// Takes all diagnostic and alert flags from the DIAG_ALRT register.
@@ -352,7 +372,7 @@ impl<I2C: I2c> Ina228<I2C> {
         if cfg.active_high {
             value |= diagnostic_alert::ACTIVE_HIGH;
         }
-        self.write_u16(Register::DiagAlrt, value)
+        Ok(self.write_u16(Register::DiagAlrt, value)?)
     }
 
     /// Set shunt over-voltage limit in Volts.
@@ -439,7 +459,7 @@ impl<I2C: I2c> Ina228<I2C> {
         lsb: f64,
     ) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(value, lsb).map_err(Error::InvalidConfiguration)?;
-        self.write_u16(reg, raw)
+        Ok(self.write_u16(reg, raw)?)
     }
 
     fn write_unsigned_limit(
@@ -450,7 +470,7 @@ impl<I2C: I2c> Ina228<I2C> {
         max_raw: u16,
     ) -> Result<(), Error<I2C::Error>> {
         let raw = encode_unsigned(value, lsb, max_raw).map_err(Error::InvalidConfiguration)?;
-        self.write_u16(reg, raw)
+        Ok(self.write_u16(reg, raw)?)
     }
 
     /// Shunt ADC range currently programmed into CONFIG.
@@ -492,44 +512,46 @@ impl<I2C: I2c> Ina228<I2C> {
         }
         self.write_u16(Register::AdcConfig, adc_config.shut_down().bits())?;
         let outcome = body(self);
-        let restored = self.write_u16(Register::AdcConfig, adc_config.bits());
+        let restored = self
+            .write_u16(Register::AdcConfig, adc_config.bits())
+            .map_err(Error::I2c);
         outcome.and_then(|value| restored.map(|()| value))
     }
 
+    /// Reads `N` bytes from `reg`. Like every bus helper here it hands back the raw
+    /// `I2C::Error`, which `?` widens to [`Error`] at the public boundary.
+    fn read_bytes<const N: usize>(&mut self, reg: Register) -> Result<[u8; N], I2C::Error> {
+        let mut bytes = [0u8; N];
+        self.i2c
+            .write_read(self.address, &[reg as u8], &mut bytes)?;
+        Ok(bytes)
+    }
+
+    fn write_u16(&mut self, reg: Register, value: u16) -> Result<(), I2C::Error> {
+        let [high, low] = value.to_be_bytes();
+        self.i2c.write(self.address, &[reg as u8, high, low])
+    }
+
     fn read_u16(&mut self, reg: Register) -> Result<u16, I2C::Error> {
-        let mut buf = [0u8; 2];
-        self.i2c.write_read(self.address, &[reg as u8], &mut buf)?;
-        Ok(u16::from_be_bytes(buf))
+        Ok(u16::from_be_bytes(self.read_bytes(reg)?))
     }
 
-    fn write_u16(&mut self, reg: Register, value: u16) -> Result<(), Error<I2C::Error>> {
-        let bytes = value.to_be_bytes();
-        self.i2c
-            .write(self.address, &[reg as u8, bytes[0], bytes[1]])
-            .map_err(Error::I2c)
+    fn read_u24(&mut self, reg: Register) -> Result<u32, I2C::Error> {
+        let [a, b, c] = self.read_bytes(reg)?;
+        Ok(u32::from_be_bytes([0, a, b, c]))
     }
 
-    fn read_u24(&mut self, reg: Register) -> Result<u32, Error<I2C::Error>> {
-        let mut bytes = [0u8; 4];
-        self.i2c
-            .write_read(self.address, &[reg as u8], &mut bytes[1..])?;
-        Ok(u32::from_be_bytes(bytes))
+    fn read_u40(&mut self, reg: Register) -> Result<u64, I2C::Error> {
+        let [a, b, c, d, e] = self.read_bytes(reg)?;
+        Ok(u64::from_be_bytes([0, 0, 0, a, b, c, d, e]))
     }
 
-    fn read_i20(&mut self, reg: Register) -> Result<i32, Error<I2C::Error>> {
-        let raw = self.read_u24(reg)? >> 4;
-        Ok(((raw as i32) << 12) >> 12)
+    /// VSHUNT and CURRENT are 20-bit signed values in the upper bits of a 24-bit register.
+    fn read_i20(&mut self, reg: Register) -> Result<i32, I2C::Error> {
+        Ok(sign_extend(u64::from(self.read_u24(reg)? >> 4), 20) as i32)
     }
 
-    fn read_u40(&mut self, reg: Register) -> Result<u64, Error<I2C::Error>> {
-        let mut bytes = [0u8; 8];
-        self.i2c
-            .write_read(self.address, &[reg as u8], &mut bytes[3..])?;
-        Ok(u64::from_be_bytes(bytes))
-    }
-
-    fn read_i40(&mut self, reg: Register) -> Result<i64, Error<I2C::Error>> {
-        let raw = self.read_u40(reg)?;
-        Ok(((raw as i64) << 24) >> 24)
+    fn read_i40(&mut self, reg: Register) -> Result<i64, I2C::Error> {
+        Ok(sign_extend(self.read_u40(reg)?, 40))
     }
 }

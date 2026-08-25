@@ -23,6 +23,7 @@
 - Suspending conversions now restores the previous ADC configuration even when the work inside the suspended window fails, so an I2C error can no longer leave the ADC shut down. The original error still propagates; a restore failure is reported only when the work itself succeeded.
 - The driver now caches CONFIG and tracks it from its own writes instead of re-reading the register before each read-modify-write. `set_adc_range`, `calibrate`, `set_temp_compensation`, `disable_temp_compensation`, and `reset_accumulators` each issue one fewer I2C transaction; a CONFIG value written by another bus master between calls is no longer picked up.
 - **Breaking:** `ConfigurationError`'s `ShuntVoltageLimit`, `BusVoltageLimit`, `TemperatureLimit`, `PowerLimit`, and `TemperatureCoefficient` variants collapse into one `Unrepresentable`. Every method that reports it takes a single physical argument, so the variant only restated which method the caller had just called.
+- **Breaking:** `take_accumulator_snapshot()` returns `Result<AccumulatorSnapshot, CaptureError<I2C::Error>>`. A capture that completed but could not resume conversions now comes back as `CaptureError::NotResumed` carrying the snapshot, instead of being discarded with the restore error — its reads had already acknowledged DIAG_ALRT and cleared the ENERGY and CHARGE overflow indicators, which no retry can recover.
 
 ### Fixed
 - Range-dependent readings and calibration now use the ADC range already active when the driver is constructed.

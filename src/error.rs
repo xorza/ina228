@@ -2,6 +2,8 @@
 
 use embedded_hal::i2c::I2c;
 
+use crate::AccumulatorSnapshot;
+
 /// Invalid physical configuration supplied to the driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigurationError {
@@ -52,4 +54,29 @@ pub enum InitializationError<I2C: I2c> {
         /// Error reported by the I2C bus.
         error: I2C::Error,
     },
+}
+
+/// Failure from [`Ina228::take_accumulator_snapshot`](crate::Ina228::take_accumulator_snapshot).
+#[derive(Debug, Clone, Copy)]
+pub enum CaptureError<E> {
+    /// The capture did not complete.
+    Failed(Error<E>),
+    /// The capture completed, but conversions could not be resumed, so the ADC may still
+    /// be shut down; reconfigure before relying on fresh measurements.
+    ///
+    /// The snapshot is carried here rather than dropped because the reads that produced it
+    /// already consumed the device's flag state — DIAG_ALRT's alerts and the ENERGY and
+    /// CHARGE overflow indicators — and no retry can recover those.
+    NotResumed {
+        /// The capture that completed before the restore was attempted.
+        snapshot: AccumulatorSnapshot,
+        /// Why conversions could not be resumed.
+        error: Error<E>,
+    },
+}
+
+impl<E> From<Error<E>> for CaptureError<E> {
+    fn from(error: Error<E>) -> Self {
+        Self::Failed(error)
+    }
 }
