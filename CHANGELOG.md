@@ -25,7 +25,7 @@
 ### Fixed
 - Range-dependent readings and calibration now use the ADC range already active when the driver is constructed.
 - Corrected the DIAG_ALRT bit mapping for alert latching, memory status, energy and charge overflow, and math overflow.
-- ADC range changes now validate SHUNT_CAL before changing CONFIG and invalidate calibration if the SHUNT_CAL rewrite fails.
+- ADC range changes now validate SHUNT_CAL before changing CONFIG.
 - Rejected non-finite and unrepresentable calibration, threshold, power-limit, and temperature-coefficient inputs before I2C access.
 - Programmed SHUNT_TEMPCO before enabling temperature compensation so partial failures cannot activate a stale coefficient.
 - Calibration now resets ENERGY and CHARGE before becoming valid, preventing accumulated samples from being interpreted with a different `CURRENT_LSB` scale.

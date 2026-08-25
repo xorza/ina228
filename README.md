@@ -59,29 +59,23 @@ let temp = ina.die_temperature().unwrap();
 
 ## Calibration
 
-Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, power, energy, or charge. The `max_current_a` parameter sets the measurement resolution — use the maximum current your load will draw, not the theoretical maximum of the shunt.
+Call `calibrate(max_current_a, shunt_resistance_ohm)` before reading current, power, energy, or charge. The `max_current_a` parameter sets the measurement resolution — use the maximum current your load will draw, not the theoretical maximum of the shunt. Its product with `shunt_resistance_ohm` must stay strictly below the selected ADC range's positive full-scale voltage.
 
-Calibration requires `max_current_a × shunt_resistance_ohm` to be strictly below the selected ADC range's positive full-scale voltage. It suspends conversions, writes SHUNT_CAL, resets the energy and charge accumulators and MATHOF, resets PWR_LIMIT to its least-restrictive `0xFFFF` value, and restores the previous ADC configuration. Resetting PWR_LIMIT prevents an existing raw threshold from silently changing its watt value with the new `CURRENT_LSB`; call `set_power_limit()` again after calibration when a power alert is required. Restoring a running mode starts a fresh conversion and clears the old conversion-ready flag. `calibrate()` does not wait synchronously; poll `take_diagnostic_flags()` until `conversion_ready` before consuming the new-scale measurements. A previous shutdown mode remains in shutdown, so call `configure()` with a conversion-producing mode before polling.
+Calibrating resets ENERGY, CHARGE, and MATHOF, and resets PWR_LIMIT to its least-restrictive `0xFFFF` because the watt value of a raw threshold moves with `CURRENT_LSB` — call `set_power_limit()` again if you need a power alert. Changing the range with `set_adc_range()` recalculates SHUNT_CAL for you, but clears the shunt over- and under-voltage thresholds, whose register scale depends on the range.
 
-Enabling, changing, or disabling shunt temperature compensation uses the same suspend-and-restore transition. Poll for conversion-ready before consuming newly compensated measurements; if the ADC was already shut down, configure or trigger a conversion first.
+## Contract
 
-If you change the ADC range via `set_adc_range()` after calling `calibrate()`, the SHUNT_CAL register is automatically recalculated. Range changes suspend conversions and disable the shunt over- and under-voltage alerts because those thresholds use a range-dependent scale; configure both thresholds again afterward. The previous ADC configuration is restored on success. `set_adc_range()` does not wait for fresh data. Before reading measurements, wait for conversion-ready from a mode that converts every channel you intend to read; conversion-ready from a bus-only mode does not make VSHUNT current.
+Three rules apply across the API:
 
-An I2C write error does not prove whether the INA228 accepted the transmitted value. If a method that writes to the device returns `Error::I2c`, do not continue with scaled operations on that driver instance. Recover with a successful `reset()` or release the bus and construct a new `Ina228`, which reads the live ADC range. Read-only I2C failures can be retried.
+- **Freshness.** No method waits for a conversion, and the driver tracks no per-channel readiness. Output registers hold the last completed result, so after a reset, configuration, calibration, range, or temperature-compensation change, poll `take_diagnostic_flags()` for `conversion_ready` from a mode that converts every channel you intend to read — conversion-ready from a bus-only mode does not make VSHUNT current.
+- **Suspend and restore.** Methods that change scaling suspend conversions and restore the previous ADC configuration whether or not the work between them succeeds, so a failure cannot leave the ADC shut down. Restoring a running mode starts a fresh conversion and clears conversion-ready; a mode that was already shut down stays shut down, so call `configure()` first.
+- **Fail-stop.** An I2C write error does not prove whether the INA228 accepted the value. After one, do not continue with scaled operations: recover with `reset()`, or release the bus and construct a new `Ina228`, which reads the live ADC range. Failed reads can be retried.
 
-Output registers retain the previous completed values until a new conversion replaces them. After reset, ADC configuration, calibration, ADC range, or temperature-compensation changes, wait for a complete conversion before consuming affected measurements. The driver does not track per-channel freshness.
+`take_diagnostic_flags()` acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` works only in continuous modes, where TI defines ENERGY and CHARGE as valid; it suspends conversions so the three reads are coherent, leaving a short gap where nothing accumulates, and returns the diagnostic state captured before its own reads cleared it. All three registers are clear-on-read, so a capture that fails part-way loses what the completed reads consumed.
 
-`take_diagnostic_flags()` reads and acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` is available only in continuous conversion modes, where TI defines ENERGY and CHARGE as valid. It briefly suspends conversions so DIAG_ALRT, ENERGY, and CHARGE form a coherent snapshot, creating a short gap during which no energy or charge is accumulated. Restoring the continuous mode starts a fresh conversion and clears the device's conversion-ready flag; the returned snapshot retains the status captured before suspension.
+Fallible methods return `Error<I2C::Error>`: `Error::InvalidConfiguration` for unrepresentable physical values and accumulator reads outside continuous mode, `Error::I2c` for bus failures. Thresholds round to the nearest register value.
 
-Every method that suspends conversions restores the previous ADC configuration whether or not the work inside succeeds, so a failure cannot leave the ADC shut down. A failed snapshot still loses whatever the completed reads already acknowledged or cleared, because those effects happen on read.
-
-Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values and accumulator reads outside continuous mode return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
-
-Construction reads CONFIG over I2C so the driver uses the ADC range already active in the device. `Ina228::new()` rejects addresses outside `0x40..=0x4F` with `InitializationError::InvalidAddress` and reports CONFIG read failures with `InitializationError::I2c`. Both variants return ownership of the I2C bus so the caller can recover the peripheral or retry initialization.
-
-`reset()` does not delay. Because reset is equivalent to power-up, wait at least 300 µs for oscillator and ADC stability and then wait for a complete conversion before consuming measurements.
-
-`AdcConfig::default()` matches the datasheet ADC_CONFIG reset value: continuous conversion of all channels, 1052 µs conversion times, and one-sample averaging.
+`Ina228::new()` reads CONFIG so the driver picks up the ADC range already active in the device. It rejects addresses outside `0x40..=0x4F` with `InitializationError::InvalidAddress` and reports read failures with `InitializationError::I2c`; both return ownership of the I2C bus. `reset()` does not delay — wait at least 300 µs for oscillator and ADC stability. `AdcConfig::default()` matches the datasheet ADC_CONFIG reset value: continuous conversion of all channels, 1052 µs conversion times, one-sample averaging.
 
 ## I2C Addresses
 
