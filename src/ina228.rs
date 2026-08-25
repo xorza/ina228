@@ -31,7 +31,7 @@ pub const DEVICE_ID: u16 = 0x228;
 /// - **Suspend and restore.** Methods that change scaling suspend conversions and put the
 ///   previous ADC configuration back, even when the work between them fails. Restoring a
 ///   running mode starts a fresh conversion and clears the conversion-ready flag; a mode
-///   that was already shut down stays shut down, so call [`configure`](Self::configure)
+///   that was already shut down stays shut down, so call [`configure_adc`](Self::configure_adc)
 ///   before waiting for data.
 /// - **Fail-stop.** An I2C write error cannot prove whether the device accepted the value.
 ///   After one, recover with [`reset`](Self::reset) or a new driver before any further
@@ -47,6 +47,24 @@ pub struct Ina228<I2C> {
     /// Live CONFIG, cached so the read-modify-write methods can skip the read. Assumes
     /// this driver is the only writer on the bus.
     config: Config,
+}
+
+/// Contents of the two identification registers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Identity {
+    /// Manufacturer ID; [`MANUFACTURER_ID`] for Texas Instruments.
+    pub manufacturer: u16,
+    /// Device ID; [`DEVICE_ID`] for the INA228.
+    pub device: u16,
+    /// Die revision, the low four bits of the device ID register.
+    pub revision: u8,
+}
+
+impl Identity {
+    /// `true` when both IDs match the values the INA228 datasheet documents.
+    pub fn is_ina228(self) -> bool {
+        self.manufacturer == MANUFACTURER_ID && self.device == DEVICE_ID
+    }
 }
 
 /// Coherent energy, charge, and diagnostic state captured by
@@ -103,8 +121,15 @@ impl<I2C: I2c> Ina228<I2C> {
     }
 
     /// Writes ADC_CONFIG: operating mode, per-channel conversion times, and averaging.
-    pub fn configure(&mut self, config: AdcConfig) -> Result<(), Error<I2C::Error>> {
+    pub fn configure_adc(&mut self, config: AdcConfig) -> Result<(), Error<I2C::Error>> {
         Ok(self.write_u16(Register::AdcConfig, AdcConfigWord::of(config).bits())?)
+    }
+
+    /// The shunt ADC range currently programmed into CONFIG.
+    ///
+    /// Free: the driver caches CONFIG, so this costs no I2C transaction.
+    pub fn adc_range(&self) -> AdcRange {
+        self.config.adc_range()
     }
 
     /// Sets the shunt ADC full-scale range, re-writing SHUNT_CAL if already calibrated.
@@ -274,7 +299,10 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Takes all diagnostic and alert flags from the DIAG_ALRT register.
     ///
-    /// This acknowledges conversion-ready and, in latched mode, threshold alert flags.
+    /// Reading is what acknowledges them, so the device offers no non-destructive peek: in
+    /// latch mode, polling for [`conversion_ready`](DiagnosticFlags::conversion_ready) also
+    /// clears every threshold alert latched since the last call. Poll in transparent mode,
+    /// where each flag tracks its live condition, or watch the ALERT pin instead.
     pub fn take_diagnostic_flags(&mut self) -> Result<DiagnosticFlags, Error<I2C::Error>> {
         Ok(DiagnosticFlags::from_device(
             self.read_u16(Register::DiagAlrt)?,
@@ -341,19 +369,19 @@ impl<I2C: I2c> Ina228<I2C> {
         )
     }
 
-    /// Reads the manufacturer ID register (expected: `0x5449` for TI).
-    pub fn manufacturer_id(&mut self) -> Result<u16, Error<I2C::Error>> {
-        Ok(self.read_u16(Register::ManufacturerId)?)
-    }
-
-    /// Returns the device ID (upper 12 bits, without die revision).
-    pub fn device_id(&mut self) -> Result<u16, Error<I2C::Error>> {
-        Ok(self.read_u16(Register::DeviceId)? >> 4)
-    }
-
-    /// Returns the die revision (lower 4 bits of device ID register).
-    pub fn die_revision(&mut self) -> Result<u8, Error<I2C::Error>> {
-        Ok((self.read_u16(Register::DeviceId)? & 0xF) as u8)
+    /// Reads both identification registers.
+    ///
+    /// Two transactions, not three: the device ID and die revision are halves of one
+    /// register. Check the result with [`Identity::is_ina228`], or compare the fields
+    /// yourself when you want to report which one differed.
+    pub fn identity(&mut self) -> Result<Identity, Error<I2C::Error>> {
+        let manufacturer = self.read_u16(Register::ManufacturerId)?;
+        let device_id = self.read_u16(Register::DeviceId)?;
+        Ok(Identity {
+            manufacturer,
+            device: device_id >> 4,
+            revision: (device_id & 0xF) as u8,
+        })
     }
 
     /// Consumes the driver and returns the underlying I2C bus.
@@ -392,11 +420,6 @@ impl<I2C: I2c> Ina228<I2C> {
     fn calibration(&self) -> Calibration {
         self.calibration
             .expect("call calibrate() before scaled operations")
-    }
-
-    /// Shunt ADC range currently programmed into CONFIG.
-    fn adc_range(&self) -> AdcRange {
-        self.config.adc_range()
     }
 
     fn read_adc_config(&mut self) -> Result<AdcConfigWord, I2C::Error> {

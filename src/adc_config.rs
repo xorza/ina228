@@ -95,7 +95,7 @@ impl AdcConfigWord {
 }
 
 /// ADC conversion time per sample.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum ConversionTime {
     /// 50 µs.
@@ -117,7 +117,7 @@ pub enum ConversionTime {
 }
 
 /// Number of ADC samples to average per conversion result.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum AveragingCount {
     /// No averaging: one sample per result.
@@ -140,7 +140,7 @@ pub enum AveragingCount {
 
 /// ADC operating mode: selects which channels to measure and whether to
 /// run continuously or in single-shot (triggered) mode.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum OperatingMode {
     /// Powered down; no conversions and no current draw from the ADC.

@@ -23,4 +23,6 @@ pub use adc_config::{AdcConfig, AveragingCount, ConversionTime, OperatingMode};
 pub use adc_range::AdcRange;
 pub use diag_alrt::{AlertConfig, DiagnosticFlags};
 pub use error::{CaptureError, ConfigurationError, Error, InitializationError};
-pub use ina228::{AccumulatorSnapshot, DEFAULT_ADDRESS, DEVICE_ID, Ina228, MANUFACTURER_ID};
+pub use ina228::{
+    AccumulatorSnapshot, DEFAULT_ADDRESS, DEVICE_ID, Identity, Ina228, MANUFACTURER_ID,
+};

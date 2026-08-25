@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use embedded_hal::{digital::InputPin, i2c::I2c};
 use ina228::{
     AdcConfig, AdcRange, AlertConfig, AveragingCount, ConversionTime, DEVICE_ID, DiagnosticFlags,
-    Ina228, MANUFACTURER_ID, OperatingMode,
+    Identity, Ina228, MANUFACTURER_ID, OperatingMode,
 };
 
 use crate::suite::{ResultContext, TestResult, require};
@@ -159,9 +159,11 @@ where
     I2C: I2c,
     I2C::Error: Debug,
 {
-    let manufacturer = ina.manufacturer_id().context("read manufacturer ID")?;
-    let device = ina.device_id().context("read device ID")?;
-    let revision = ina.die_revision().context("read die revision")?;
+    let Identity {
+        manufacturer,
+        device,
+        revision,
+    } = ina.identity().context("read identity registers")?;
 
     require(
         manufacturer == MANUFACTURER_ID,
@@ -199,7 +201,7 @@ where
     I2C::Error: Debug,
 {
     reset_device(ina)?;
-    ina.configure(fast_config(OperatingMode::Shutdown, AveragingCount::N1))
+    ina.configure_adc(fast_config(OperatingMode::Shutdown, AveragingCount::N1))
         .context("enter shutdown mode")?;
     ina.take_diagnostic_flags()
         .context("acknowledge conversion-ready before shutdown check")?;
@@ -219,7 +221,7 @@ where
     I2C::Error: Debug,
 {
     reset_device(ina)?;
-    ina.configure(AdcConfig {
+    ina.configure_adc(AdcConfig {
         mode: case.mode,
         bus_conversion_time: ConversionTime::Us4120,
         shunt_conversion_time: ConversionTime::Us4120,
@@ -262,7 +264,7 @@ where
     I2C::Error: Debug,
 {
     reset_device(ina)?;
-    ina.configure(AdcConfig {
+    ina.configure_adc(AdcConfig {
         mode: OperatingMode::TriggeredBus,
         bus_conversion_time: case.conversion_time,
         shunt_conversion_time: ConversionTime::Us50,
@@ -283,7 +285,7 @@ where
     I2C::Error: Debug,
 {
     reset_device(ina)?;
-    ina.configure(AdcConfig {
+    ina.configure_adc(AdcConfig {
         mode: OperatingMode::TriggeredBus,
         bus_conversion_time: ConversionTime::Us2074,
         shunt_conversion_time: ConversionTime::Us50,
@@ -574,7 +576,7 @@ where
     ALERT::Error: Debug,
 {
     prepare_alert_fixture(ina)?;
-    ina.configure(fast_config(OperatingMode::Shutdown, AveragingCount::N1))
+    ina.configure_adc(fast_config(OperatingMode::Shutdown, AveragingCount::N1))
         .context("enter shutdown before conversion-ready ALERT test")?;
     ina.configure_alerts(AlertConfig {
         conversion_ready: true,
@@ -583,7 +585,7 @@ where
     .context("enable conversion-ready ALERT")?;
     wait_for_alert_level(alert, true, "conversion-ready ALERT idle state")?;
 
-    ina.configure(fast_config(OperatingMode::TriggeredAll, AveragingCount::N1))
+    ina.configure_adc(fast_config(OperatingMode::TriggeredAll, AveragingCount::N1))
         .context("start triggered conversion for ALERT")?;
     wait_for_alert_level(alert, false, "conversion-ready ALERT assertion")?;
     let flags = ina
@@ -720,7 +722,7 @@ where
     I2C::Error: Debug,
 {
     reset_device(ina)?;
-    ina.configure(measurement_config())
+    ina.configure_adc(measurement_config())
         .context("configure continuous measurements")?;
     ina.set_adc_range(range).context("set ADC range")?;
     ina.calibrate(MAX_CURRENT_A, SHUNT_RESISTANCE_OHM)
@@ -990,7 +992,7 @@ where
     I2C: I2c,
     I2C::Error: Debug,
 {
-    ina.configure(measurement_config())
+    ina.configure_adc(measurement_config())
         .context("restart conversion for alert check")?;
     let flags = wait_for_conversion(ina)?;
     require(flags.memory_ok(), "memory checksum failed during alert check")?;

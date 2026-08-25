@@ -2,8 +2,8 @@ use embedded_hal::i2c::ErrorKind;
 use embedded_hal_mock::eh1::i2c::{Mock, Transaction};
 use ina228::{
     AdcConfig, AdcRange, AlertConfig, AveragingCount, CaptureError, ConfigurationError,
-    ConversionTime, DEFAULT_ADDRESS, Error as DriverError, Ina228, InitializationError,
-    OperatingMode,
+    ConversionTime, DEFAULT_ADDRESS, DEVICE_ID, Error as DriverError, Ina228, InitializationError,
+    MANUFACTURER_ID, OperatingMode,
 };
 
 const ADDR: u8 = DEFAULT_ADDRESS;
@@ -322,31 +322,31 @@ fn configure_encodes_every_adc_enum_variant() {
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     for &(mode, _) in &mode_cases {
-        ina.configure(AdcConfig {
+        ina.configure_adc(AdcConfig {
             mode,
             ..AdcConfig::default()
         })
         .unwrap();
     }
     for &(conversion_time, _) in &conversion_time_cases {
-        ina.configure(AdcConfig {
+        ina.configure_adc(AdcConfig {
             bus_conversion_time: conversion_time,
             ..AdcConfig::default()
         })
         .unwrap();
-        ina.configure(AdcConfig {
+        ina.configure_adc(AdcConfig {
             shunt_conversion_time: conversion_time,
             ..AdcConfig::default()
         })
         .unwrap();
-        ina.configure(AdcConfig {
+        ina.configure_adc(AdcConfig {
             temperature_conversion_time: conversion_time,
             ..AdcConfig::default()
         })
         .unwrap();
     }
     for &(averaging, _) in &averaging_cases {
-        ina.configure(AdcConfig {
+        ina.configure_adc(AdcConfig {
             averaging,
             ..AdcConfig::default()
         })
@@ -837,20 +837,33 @@ fn reset_accumulators() {
 }
 
 #[test]
-fn manufacturer_id() {
-    let i2c = mock(&[read_txn(0x3E, &0x5449_u16.to_be_bytes())]);
+fn identity_reads_both_registers_once_each() {
+    // DEVICE_ID returns 0x2285: device 0x228 in the upper 12 bits, revision 5 in the low 4.
+    let i2c = mock(&[
+        read_txn(0x3E, &0x5449_u16.to_be_bytes()),
+        read_txn(0x3F, &0x2285_u16.to_be_bytes()),
+    ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(ina.manufacturer_id().unwrap(), 0x5449);
+    let identity = ina.identity().unwrap();
+    assert_eq!(identity.manufacturer, MANUFACTURER_ID);
+    assert_eq!(identity.device, DEVICE_ID);
+    assert_eq!(identity.revision, 5);
+    assert!(identity.is_ina228());
     ina.release().done();
 }
 
 #[test]
-fn device_id() {
-    // Register returns 0x2281 (device=0x228, revision=1)
-    let i2c = mock(&[read_txn(0x3F, &0x2281_u16.to_be_bytes())]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(ina.device_id().unwrap(), 0x228);
-    ina.release().done();
+fn identity_rejects_a_foreign_device() {
+    // Either half being wrong is enough to fail the check.
+    for (manufacturer, device_register) in [(0x1234_u16, 0x2285_u16), (0x5449, 0x1235)] {
+        let i2c = mock(&[
+            read_txn(0x3E, &manufacturer.to_be_bytes()),
+            read_txn(0x3F, &device_register.to_be_bytes()),
+        ]);
+        let mut ina = Ina228::new(i2c, ADDR).unwrap();
+        assert!(!ina.identity().unwrap().is_ina228());
+        ina.release().done();
+    }
 }
 
 #[test]
@@ -1107,19 +1120,11 @@ fn set_power_limit_rejects_invalid_values_before_i2c() {
 }
 
 #[test]
-fn die_revision() {
-    // Register returns 0x2285 (device=0x228, revision=5)
-    let i2c = mock(&[read_txn(0x3F, &0x2285_u16.to_be_bytes())]);
-    let mut ina = Ina228::new(i2c, ADDR).unwrap();
-    assert_eq!(ina.die_revision().unwrap(), 5);
-    ina.release().done();
-}
-
-#[test]
 fn shunt_voltage_uses_range_read_during_initialization() {
     // 0.001V / 78.125e-9 = 12800 (raw 20-bit)
     let i2c = mock_with_config(1 << 4, &[read_txn(0x04, &u24_bytes(12800 << 4))]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
+    assert_eq!(ina.adc_range(), AdcRange::Range40mV);
     let v = ina.shunt_voltage().unwrap();
     assert!((v - 0.001).abs() < 1e-6, "expected ~0.001V, got {v}");
     ina.release().done();

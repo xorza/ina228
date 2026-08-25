@@ -23,7 +23,7 @@ use ina228::{
 let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS).unwrap();
 
 // Configure: continuous bus+shunt+temp, 1052µs conversion, 64x averaging
-ina.configure(AdcConfig {
+ina.configure_adc(AdcConfig {
     averaging: AveragingCount::N64,
     ..Default::default()
 })
@@ -32,7 +32,8 @@ ina.configure(AdcConfig {
 // Calibrate for 10A max expected current, 2mΩ shunt resistor
 ina.calibrate(10.0, 0.002).unwrap();
 
-// Polling acknowledges every snapshot; production code must handle every returned flag.
+// Reading DIAG_ALRT is what acknowledges it, so in latch mode this loop also clears any
+// threshold alert. Poll in transparent mode, or watch the ALERT pin, if that matters.
 loop {
     let flags = ina.take_diagnostic_flags().unwrap();
     if flags.conversion_ready() {
@@ -67,10 +68,10 @@ Calibrating resets ENERGY, CHARGE, and MATHOF, and resets PWR_LIMIT to its least
 Three rules apply across the API:
 
 - **Freshness.** No method waits for a conversion, and the driver tracks no per-channel readiness. Output registers hold the last completed result, so after a reset, configuration, calibration, range, or temperature-compensation change, poll `take_diagnostic_flags()` for `conversion_ready` from a mode that converts every channel you intend to read — conversion-ready from a bus-only mode does not make VSHUNT current.
-- **Suspend and restore.** Methods that change scaling suspend conversions and restore the previous ADC configuration whether or not the work between them succeeds, so a failure cannot leave the ADC shut down. Restoring a running mode starts a fresh conversion and clears conversion-ready; a mode that was already shut down stays shut down, so call `configure()` first.
+- **Suspend and restore.** Methods that change scaling suspend conversions and restore the previous ADC configuration whether or not the work between them succeeds, so a failure cannot leave the ADC shut down. Restoring a running mode starts a fresh conversion and clears conversion-ready; a mode that was already shut down stays shut down, so call `configure_adc()` first.
 - **Fail-stop.** An I2C write error does not prove whether the INA228 accepted the value. After one, do not continue with scaled operations: recover with `reset()`, or release the bus and construct a new `Ina228`, which reads the live ADC range. Failed reads can be retried.
 
-`take_diagnostic_flags()` acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` works only in continuous modes, where TI defines ENERGY and CHARGE as valid; it suspends conversions so the three reads are coherent, leaving a short gap where nothing accumulates, and returns the diagnostic state captured before its own reads cleared it. Reading leaves the accumulated values alone — only `reset_accumulators()` clears those — but it does consume flag state: DIAG_ALRT's conversion-ready and latched alerts, and the ENERGY and CHARGE overflow indicators. A capture that fails mid-read loses whichever of those its completed reads already took.
+`take_diagnostic_flags()` acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts; the device offers no non-destructive read, so polling for conversion-ready in latch mode necessarily clears the rest. `identity()` reads both ID registers and `Identity::is_ina228()` checks them against the datasheet values. `take_accumulator_snapshot()` works only in continuous modes, where TI defines ENERGY and CHARGE as valid; it suspends conversions so the three reads are coherent, leaving a short gap where nothing accumulates, and returns the diagnostic state captured before its own reads cleared it. Reading leaves the accumulated values alone — only `reset_accumulators()` clears those — but it does consume flag state: DIAG_ALRT's conversion-ready and latched alerts, and the ENERGY and CHARGE overflow indicators. A capture that fails mid-read loses whichever of those its completed reads already took.
 
 Fallible methods return `Error<I2C::Error>`: `Error::InvalidConfiguration` for unrepresentable physical values and accumulator reads outside continuous mode, `Error::I2c` for bus failures. Thresholds round to the nearest register value. `take_accumulator_snapshot()` returns `CaptureError` instead, so that a capture which completed but could not resume conversions is handed back with its snapshot rather than dropped — the reads that produced it already consumed the device's flag state.
 
