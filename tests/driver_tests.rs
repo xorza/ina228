@@ -104,6 +104,74 @@ fn u40_bytes(val: u64) -> [u8; 5] {
     ]
 }
 
+/// A bus that is deliberately not `Debug`. `InitializationError` must still print, or a
+/// caller cannot `.unwrap()` a construction failure.
+struct NotDebugBus;
+
+impl embedded_hal::i2c::ErrorType for NotDebugBus {
+    type Error = ErrorKind;
+}
+
+impl embedded_hal::i2c::I2c for NotDebugBus {
+    fn transaction(
+        &mut self,
+        _address: u8,
+        _operations: &mut [embedded_hal::i2c::Operation<'_>],
+    ) -> Result<(), Self::Error> {
+        unreachable!("an invalid address is rejected before any bus access")
+    }
+}
+
+#[test]
+fn initialization_error_prints_without_a_debug_bus() {
+    let Err(error) = Ina228::new(NotDebugBus, 0x00) else {
+        panic!("expected the address to be rejected");
+    };
+    assert_eq!(format!("{error:?}"), "InvalidAddress { address: 0, .. }");
+    assert_eq!(
+        format!("{error}"),
+        "I2C address 0x00 is outside 0x40..=0x4F"
+    );
+}
+
+#[test]
+fn errors_display_as_sentences() {
+    assert_eq!(
+        DriverError::<ErrorKind>::InvalidConfiguration(ConfigurationError::AccumulatorMode)
+            .to_string(),
+        "energy and charge require a continuous conversion mode"
+    );
+    assert_eq!(
+        DriverError::I2c(ErrorKind::Bus).to_string(),
+        "I2C bus error: Bus error occurred"
+    );
+    assert_eq!(
+        CaptureError::Failed(DriverError::I2c(ErrorKind::Overrun)).to_string(),
+        "accumulator capture failed: I2C bus error: The peripheral receive buffer was overrun"
+    );
+}
+
+#[test]
+fn errors_chain_to_their_source() {
+    use std::error::Error as _;
+
+    // What anyhow and eyre walk: CaptureError -> Error -> ConfigurationError.
+    let captured = CaptureError::Failed(DriverError::<ErrorKind>::InvalidConfiguration(
+        ConfigurationError::MaxCurrent,
+    ));
+    let outer = captured.source().expect("CaptureError exposes its Error");
+    let inner = outer
+        .source()
+        .expect("Error exposes its ConfigurationError");
+    assert_eq!(
+        inner.to_string(),
+        "maximum expected current must be finite and positive"
+    );
+
+    // A bus error is where the chain stops: embedded-hal guarantees it only `Debug`.
+    assert!(DriverError::I2c(ErrorKind::Bus).source().is_none());
+}
+
 #[test]
 fn new_default_address() {
     let i2c = mock(&[]);

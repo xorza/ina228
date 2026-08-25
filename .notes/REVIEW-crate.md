@@ -9,19 +9,6 @@ rewritten to fit whatever shape production takes.
 
 ---
 
-## Error types cannot be used for anything but `Debug` printing
-
-- [ ] None of `Error`, `ConfigurationError`, or `InitializationError` implements
-      `core::fmt::Display` or `core::error::Error`, both of which are available in
-      `no_std` on edition 2024. Callers cannot print a failure or propagate it into any
-      error-handling crate.
-- [ ] `InitializationError` derives `Debug` with the derive's implicit bounds
-      (`src/error.rs:40-41`), so it is only `Debug` when the I2C bus type is. The README's own
-      usage example has to work around this with
-      `.unwrap_or_else(|_| panic!("failed to read INA228 CONFIG"))` instead of `.unwrap()`.
-- [ ] `InitializationError<I2C: I2c>` carries the bound on the type definition, forcing it
-      onto every signature that names the type.
-
 ## Read-back and identity gaps push work onto callers
 
 - [ ] `device_id` and `die_revision` (`src/ina228.rs:350-357`) each issue a separate I2C read

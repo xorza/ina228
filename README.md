@@ -20,8 +20,7 @@ use ina228::{
     AdcConfig, AveragingCount, Ina228, DEFAULT_ADDRESS,
 };
 
-let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS)
-    .unwrap_or_else(|_| panic!("failed to read INA228 CONFIG"));
+let mut ina = Ina228::new(i2c, DEFAULT_ADDRESS).unwrap();
 
 // Configure: continuous bus+shunt+temp, 1052µs conversion, 64x averaging
 ina.configure(AdcConfig {

@@ -25,6 +25,8 @@
 - **Breaking:** `ConfigurationError`'s `ShuntVoltageLimit`, `BusVoltageLimit`, `TemperatureLimit`, `PowerLimit`, and `TemperatureCoefficient` variants collapse into one `Unrepresentable`. Every method that reports it takes a single physical argument, so the variant only restated which method the caller had just called.
 - **Breaking:** `take_accumulator_snapshot()` returns `Result<AccumulatorSnapshot, CaptureError<I2C::Error>>`. A capture that completed but could not resume conversions now comes back as `CaptureError::NotResumed` carrying the snapshot, instead of being discarded with the restore error — its reads had already acknowledged DIAG_ALRT and cleared the ENERGY and CHARGE overflow indicators, which no retry can recover.
 - **Breaking:** `DiagnosticFlags` wraps the DIAG_ALRT word instead of expanding it into eleven `bool` fields; each flag is now a method (`flags.conversion_ready()`), and `bits()` exposes the raw word. A capture costs two bytes instead of eleven and a caller pays only for the flags it reads.
+- `ConfigurationError`, `Error`, `CaptureError`, and `InitializationError` now implement `Display` and `core::error::Error`, so a failure can be printed or propagated into an error-handling crate. Bus failures render their `embedded-hal` `ErrorKind`; `Debug` still carries whatever detail the concrete bus error adds.
+- `InitializationError` implements `Debug` by hand instead of deriving it, so it no longer requires the I2C bus type to be `Debug`. `Ina228::new(..).unwrap()` now works for any bus.
 - Documented every variant of `ConversionTime`, `AveragingCount`, and `OperatingMode`, both `AccumulatorSnapshot` value fields, and every diagnostic flag; the crate now denies `missing_docs`.
 
 ### Fixed
