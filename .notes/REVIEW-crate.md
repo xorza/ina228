@@ -12,9 +12,11 @@ rewritten to fit whatever shape production takes.
 ## A failed restore discards a completed accumulator capture
 
 - [ ] `take_accumulator_snapshot` builds a complete, valid `AccumulatorSnapshot`
-      (`src/lib.rs:324-333`) and then drops it when the ADC_CONFIG restore fails
-      (`src/lib.rs:518`). The clear-on-read side effects already happened, so those counts
-      are gone for good. `Result<AccumulatorSnapshot, _>` can carry the snapshot or the
+      (`src/lib.rs:329-338`) and then drops it when the ADC_CONFIG restore fails
+      (`src/lib.rs:523`). The accumulated values survive — only RSTACC clears those, so a
+      retry re-reads them — but the flag state the snapshot exists to carry is gone: the
+      completed reads already acknowledged DIAG_ALRT and cleared the ENERGY and CHARGE
+      overflow indicators. `Result<AccumulatorSnapshot, _>` can carry the snapshot or the
       restore error, not both.
 
 ## The ADC_CONFIG mode field is re-encoded in four places
@@ -26,8 +28,8 @@ rewritten to fit whatever shape production takes.
 - [ ] There is no decode from a read-back ADC_CONFIG word to `OperatingMode`, so mode
       semantics are re-derived from raw bits with two different ad-hoc predicates:
       `mode == 0 || mode == ALTERNATE_SHUTDOWN_MODE` in `with_conversions_suspended`
-      (`src/lib.rs:512`) and `mode < FIRST_CONTINUOUS_MODE` in
-      `take_accumulator_snapshot` (`src/lib.rs:319`).
+      (`src/lib.rs:517`) and `mode < FIRST_CONTINUOUS_MODE` in
+      `take_accumulator_snapshot` (`src/lib.rs:324`).
 - [ ] CONFIG has a typed representation in `src/config.rs` while ADC_CONFIG has none:
       its three bit constants sit loose in `src/registers.rs` (`36-38`) and `configure`
       re-encodes the mode field inline. Two registers of the same device, modelled two
@@ -35,13 +37,13 @@ rewritten to fit whatever shape production takes.
 
 ## Register-word access helpers are four near-copies
 
-- [ ] `read_u24` (`src/lib.rs:534`) and `read_u40` (`src/lib.rs:546`) differ only in
+- [ ] `read_u24` (`src/lib.rs:539`) and `read_u40` (`src/lib.rs:551`) differ only in
       buffer length and the byte offset the read lands at.
-- [ ] `read_i20` (`src/lib.rs:541`) and `read_i40` (`src/lib.rs:553`) differ only in the
+- [ ] `read_i20` (`src/lib.rs:546`) and `read_i40` (`src/lib.rs:558`) differ only in the
       sign-extension shift width.
 - [ ] The private I2C helpers disagree on where the bus error is widened: `read_u16`
-      returns the raw `I2C::Error` (`src/lib.rs:521`), `write_u16` wraps it with
-      `.map_err(Error::I2c)` (`src/lib.rs:527`), and `read_u24` / `read_u40` wrap via `?`.
+      returns the raw `I2C::Error` (`src/lib.rs:526`), `write_u16` wraps it with
+      `.map_err(Error::I2c)` (`src/lib.rs:532`), and `read_u24` / `read_u40` wrap via `?`.
 
 ## Missing calibration is enforced by four hand-written panics
 
@@ -71,7 +73,7 @@ Against the stated conventions in `CLAUDE.md`:
 ## Bit state is expanded into wide, undocumented structs at the API boundary
 
 - [ ] `take_diagnostic_flags` decodes DIAG_ALRT into eleven `bool` fields with eleven
-      hand-written `d & MASK != 0` lines (`src/lib.rs:353-363`) — an 11-byte struct and
+      hand-written `d & MASK != 0` lines (`src/lib.rs:358-368`) — an 11-byte struct and
       eleven test-and-store sequences to carry two bytes of device state on an MCU target.
 - [ ] Ten of `DiagnosticFlags`'s eleven public fields are undocumented
       (`src/lib.rs:119-131`); only `memory_ok` has a `///`. Two of
@@ -97,7 +99,7 @@ Against the stated conventions in `CLAUDE.md`:
 
 ## Read-back and identity gaps push work onto callers
 
-- [ ] `device_id` and `die_revision` (`src/lib.rs:448-455`) each issue a separate I2C read
+- [ ] `device_id` and `die_revision` (`src/lib.rs:453-460`) each issue a separate I2C read
       of the same register 0x3F; a caller wanting both pays two transactions for two
       halves of one word.
 - [ ] `MANUFACTURER_ID` and `DEVICE_ID` are exported but never used by the driver, so the
@@ -108,7 +110,7 @@ Against the stated conventions in `CLAUDE.md`:
       ADC_CONFIG as an `AdcConfig`, nor of the raw DIAG_ALRT word.
 - [ ] The only way to poll for conversion-ready is `take_diagnostic_flags`, which
       acknowledges every other latched threshold alert as a side effect
-      (`src/lib.rs:350`). The README's own polling loop demonstrates the hazard and warns
+      (`src/lib.rs:355`). The README's own polling loop demonstrates the hazard and warns
       about it in a comment rather than the API preventing it.
 - [ ] `set_adc_range` clobbers SOVL and SUVL to their extremes and never restores them
       (`src/lib.rs:211-212`), discarding caller configuration the driver has enough

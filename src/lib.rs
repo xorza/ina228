@@ -308,8 +308,13 @@ impl<I2C: I2c> Ina228<I2C> {
     ///
     /// Valid only in continuous conversion modes. Conversions are suspended so DIAG_ALRT,
     /// ENERGY, and CHARGE cannot change between the three reads, leaving a brief gap where
-    /// nothing accumulates. All three are clear-on-read, so a capture that fails part-way
-    /// loses whatever the completed reads already consumed.
+    /// nothing accumulates.
+    ///
+    /// Reading leaves the accumulated values alone — only
+    /// [`reset_accumulators`](Self::reset_accumulators) clears those — but it does consume
+    /// flag state: DIAG_ALRT acknowledges conversion-ready and any latched alert, and
+    /// ENERGY and CHARGE clear their overflow indicators. A capture that fails part-way
+    /// loses whichever of those its completed reads already took.
     pub fn take_accumulator_snapshot(&mut self) -> Result<AccumulatorSnapshot, Error<I2C::Error>> {
         let calibration = self
             .calibration
