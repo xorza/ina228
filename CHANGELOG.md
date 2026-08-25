@@ -21,6 +21,7 @@
 - `calibrate()` derives SHUNT_CAL from the exact `max_current_a / 2^19` instead of rounding CURRENT_LSB to `f32` first, and current, power, energy, and charge are scaled from that unrounded value. Returned measurements can differ from 0.2.0 by one ULP.
 - Physical-unit setters divide by their register LSB in `f64`, so a threshold sitting within an `f32` rounding step of a half-count boundary now rounds to the nearer register code.
 - Suspending conversions now restores the previous ADC configuration even when the work inside the suspended window fails, so an I2C error can no longer leave the ADC shut down. The original error still propagates; a restore failure is reported only when the work itself succeeded.
+- The driver now caches CONFIG and tracks it from its own writes instead of re-reading the register before each read-modify-write. `set_adc_range`, `calibrate`, `set_temp_compensation`, `disable_temp_compensation`, and `reset_accumulators` each issue one fewer I2C transaction; a CONFIG value written by another bus master between calls is no longer picked up.
 
 ### Fixed
 - Range-dependent readings and calibration now use the ADC range already active when the driver is constructed.

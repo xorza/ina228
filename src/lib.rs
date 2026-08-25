@@ -1,10 +1,12 @@
 #![no_std]
 
+mod config;
 mod registers;
 mod scale;
 
+use config::Config;
 use embedded_hal::i2c::I2c;
-use registers::{Register, adc_config, config, diagnostic_alert};
+use registers::{Register, adc_config, diagnostic_alert};
 
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
@@ -160,7 +162,9 @@ pub struct Ina228<I2C> {
     i2c: I2C,
     address: u8,
     calibration: Option<Calibration>,
-    adc_range: AdcRange,
+    /// Live CONFIG, cached so the read-modify-write methods can skip the read. Assumes
+    /// this driver is the only writer on the bus.
+    config: Config,
 }
 
 /// ADC operating mode, conversion times, and averaging configuration.
@@ -239,7 +243,7 @@ pub struct AccumulatorSnapshot {
 }
 
 impl<I2C: I2c> Ina228<I2C> {
-    /// Creates a driver and reads CONFIG to synchronize the ADC range.
+    /// Creates a driver and reads CONFIG, so it starts from the device's live settings.
     ///
     /// # Errors
     ///
@@ -249,18 +253,22 @@ impl<I2C: I2c> Ina228<I2C> {
         if !(0x40..=0x4F).contains(&address) {
             return Err(InitializationError::InvalidAddress { i2c, address });
         }
-        let mut i2c = i2c;
-        let config_value = match Self::read_u16_from(&mut i2c, address, Register::Config) {
-            Ok(value) => value,
-            Err(error) => return Err(InitializationError::I2c { i2c, error }),
-        };
-        let adc_range = AdcRange::from_config(config_value);
-        Ok(Self {
+        let mut driver = Self {
             i2c,
             address,
             calibration: None,
-            adc_range,
-        })
+            config: Config::RESET_VALUE,
+        };
+        match driver.read_u16(Register::Config) {
+            Ok(value) => {
+                driver.config = Config::from_device(value);
+                Ok(driver)
+            }
+            Err(error) => Err(InitializationError::I2c {
+                i2c: driver.release(),
+                error,
+            }),
+        }
     }
 
     /// Performs a soft reset, restoring all registers to defaults.
@@ -268,9 +276,9 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Equivalent to power-up, with no delay of its own: wait at least 300 µs for
     /// oscillator and ADC stability before anything else.
     pub fn reset(&mut self) -> Result<(), Error<I2C::Error>> {
-        self.write_u16(Register::Config, config::RESET)?;
+        self.write_u16(Register::Config, Config::RESET_COMMAND)?;
         self.calibration = None;
-        self.adc_range = AdcRange::Range163mV;
+        self.config = Config::RESET_VALUE;
         Ok(())
     }
 
@@ -289,7 +297,7 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Clears the shunt over- and under-voltage alert thresholds, whose register scale
     /// depends on the range; set them again afterward.
     pub fn set_adc_range(&mut self, range: AdcRange) -> Result<(), Error<I2C::Error>> {
-        if self.adc_range == range {
+        if self.adc_range() == range {
             return Ok(());
         }
 
@@ -298,16 +306,15 @@ impl<I2C: I2c> Ina228<I2C> {
             .map(|calibration| calibration.shunt_cal(range))
             .transpose()
             .map_err(Error::InvalidConfiguration)?;
-        let config_value = self.read_u16(Register::Config)?;
+        let config_value = self.config.with_adc_range(range);
         let adc_config = self.read_u16(Register::AdcConfig)?;
         self.with_conversions_suspended(adc_config, |driver| {
             driver.write_u16(Register::Sovl, i16::MAX as u16)?;
             driver.write_u16(Register::Suvl, i16::MIN as u16)?;
-            driver.write_u16(Register::Config, range.apply_to_config(config_value))?;
+            driver.write_config(config_value)?;
             if let Some(shunt_cal) = shunt_cal {
                 driver.write_u16(Register::ShuntCal, shunt_cal)?;
             }
-            driver.adc_range = range;
             Ok(())
         })
     }
@@ -340,7 +347,7 @@ impl<I2C: I2c> Ina228<I2C> {
             current_lsb: max_current_a as f64 / scale::SIGNED_20_BIT_FULL_SCALE,
             shunt_resistance_ohm: shunt_resistance_ohm as f64,
         };
-        let adc_range = self.adc_range;
+        let adc_range = self.adc_range();
         let shunt_cal = calibration
             .shunt_cal(adc_range)
             .map_err(Error::InvalidConfiguration)?;
@@ -364,27 +371,19 @@ impl<I2C: I2c> Ina228<I2C> {
                 ConfigurationError::TemperatureCoefficient,
             ));
         }
-        let config_value = self.read_u16(Register::Config)?;
+        let config_value = self.config.with_temperature_compensation(true);
         let adc_config = self.read_u16(Register::AdcConfig)?;
         self.with_conversions_suspended(adc_config, |driver| {
             driver.write_u16(Register::ShuntTempco, tempco_ppm)?;
-            driver.write_u16(
-                Register::Config,
-                config_value | config::TEMPERATURE_COMPENSATION,
-            )
+            driver.write_config(config_value)
         })
     }
 
     /// Disables shunt temperature compensation.
     pub fn disable_temp_compensation(&mut self) -> Result<(), Error<I2C::Error>> {
-        let config_value = self.read_u16(Register::Config)?;
+        let config_value = self.config.with_temperature_compensation(false);
         let adc_config = self.read_u16(Register::AdcConfig)?;
-        self.with_conversions_suspended(adc_config, |driver| {
-            driver.write_u16(
-                Register::Config,
-                config_value & !config::TEMPERATURE_COMPENSATION,
-            )
-        })
+        self.with_conversions_suspended(adc_config, |driver| driver.write_config(config_value))
     }
 
     /// Returns bus voltage in Volts.
@@ -396,7 +395,7 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Returns shunt voltage in Volts. The LSB depends on the configured ADC range.
     pub fn shunt_voltage(&mut self) -> Result<f32, Error<I2C::Error>> {
         let raw = self.read_i20(Register::Vshunt)?;
-        Ok(raw as f32 * self.adc_range.shunt_voltage_lsb())
+        Ok(raw as f32 * self.adc_range().shunt_voltage_lsb())
     }
 
     /// Returns current in Amps. Requires prior [`calibrate`](Self::calibrate) call.
@@ -454,8 +453,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Resets the energy and charge accumulator registers and clears MATHOF.
     pub fn reset_accumulators(&mut self) -> Result<(), Error<I2C::Error>> {
-        let config_value = self.read_u16(Register::Config)?;
-        self.write_u16(Register::Config, config_value | config::RESET_ACCUMULATORS)
+        self.write_u16(Register::Config, self.config.accumulator_reset_command())
     }
 
     /// Takes all diagnostic and alert flags from the DIAG_ALRT register.
@@ -500,7 +498,7 @@ impl<I2C: I2c> Ina228<I2C> {
     pub fn set_shunt_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(
             voltage_v,
-            self.adc_range.shunt_limit_lsb() as f64,
+            self.adc_range().shunt_limit_lsb() as f64,
             ConfigurationError::ShuntVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -514,7 +512,7 @@ impl<I2C: I2c> Ina228<I2C> {
     ) -> Result<(), Error<I2C::Error>> {
         let raw = encode_signed(
             voltage_v,
-            self.adc_range.shunt_limit_lsb() as f64,
+            self.adc_range().shunt_limit_lsb() as f64,
             ConfigurationError::ShuntVoltageLimit,
         )
         .map_err(Error::InvalidConfiguration)?;
@@ -573,7 +571,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Reads the manufacturer ID register (expected: `0x5449` for TI).
     pub fn manufacturer_id(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_u16(Register::ManufacturerId)
+        Ok(self.read_u16(Register::ManufacturerId)?)
     }
 
     /// Returns the device ID (upper 12 bits, without die revision).
@@ -589,6 +587,23 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Consumes the driver and returns the underlying I2C bus.
     pub fn release(self) -> I2C {
         self.i2c
+    }
+
+    /// Shunt ADC range currently programmed into CONFIG.
+    fn adc_range(&self) -> AdcRange {
+        self.config.adc_range()
+    }
+
+    /// Writes CONFIG and records it as the new cached value.
+    ///
+    /// Taking a [`Config`] is what keeps the cache honest: the self-clearing commands
+    /// used by [`reset`](Self::reset) and
+    /// [`reset_accumulators`](Self::reset_accumulators) are bare words, so they cannot
+    /// reach this path.
+    fn write_config(&mut self, value: Config) -> Result<(), Error<I2C::Error>> {
+        self.write_u16(Register::Config, value.bits())?;
+        self.config = value;
+        Ok(())
     }
 
     /// Runs `body` with conversions suspended, then puts `adc_config` back.
@@ -612,14 +627,10 @@ impl<I2C: I2c> Ina228<I2C> {
         outcome.and_then(|value| restored.map(|()| value))
     }
 
-    fn read_u16_from(i2c: &mut I2C, address: u8, reg: Register) -> Result<u16, I2C::Error> {
+    fn read_u16(&mut self, reg: Register) -> Result<u16, I2C::Error> {
         let mut buf = [0u8; 2];
-        i2c.write_read(address, &[reg as u8], &mut buf)?;
+        self.i2c.write_read(self.address, &[reg as u8], &mut buf)?;
         Ok(u16::from_be_bytes(buf))
-    }
-
-    fn read_u16(&mut self, reg: Register) -> Result<u16, Error<I2C::Error>> {
-        Self::read_u16_from(&mut self.i2c, self.address, reg).map_err(Error::I2c)
     }
 
     fn write_u16(&mut self, reg: Register, value: u16) -> Result<(), Error<I2C::Error>> {

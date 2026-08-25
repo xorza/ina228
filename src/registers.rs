@@ -25,13 +25,6 @@ pub(crate) enum Register {
     DeviceId = 0x3F,
 }
 
-pub(crate) mod config {
-    pub(crate) const RESET: u16 = 1 << 15;
-    pub(crate) const RESET_ACCUMULATORS: u16 = 1 << 14;
-    pub(crate) const TEMPERATURE_COMPENSATION: u16 = 1 << 5;
-    pub(crate) const ADC_RANGE: u16 = 1 << 4;
-}
-
 pub(crate) mod adc_config {
     pub(crate) const MODE_MASK: u16 = 0xF << 12;
     pub(crate) const ALTERNATE_SHUTDOWN_MODE: u16 = 8 << 12;
@@ -67,21 +60,6 @@ pub enum AdcRange {
 }
 
 impl AdcRange {
-    pub(crate) fn from_config(value: u16) -> Self {
-        if value & config::ADC_RANGE == 0 {
-            Self::Range163mV
-        } else {
-            Self::Range40mV
-        }
-    }
-
-    pub(crate) fn apply_to_config(self, value: u16) -> u16 {
-        match self {
-            Self::Range163mV => value & !config::ADC_RANGE,
-            Self::Range40mV => value | config::ADC_RANGE,
-        }
-    }
-
     /// This range's VSHUNT LSB as a fraction of the ±163.84 mV range's.
     ///
     /// The only per-range scale factor in the crate. Every shunt-domain scale below is
