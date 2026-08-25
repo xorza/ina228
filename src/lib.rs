@@ -7,6 +7,7 @@
 //! and when calibration is required) are documented once on [`Ina228`].
 
 #![no_std]
+#![deny(missing_docs)]
 
 mod adc_config;
 mod adc_range;

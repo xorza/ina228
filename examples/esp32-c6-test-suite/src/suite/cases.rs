@@ -555,7 +555,7 @@ where
         .take_diagnostic_flags()
         .context("acknowledge latched ALERT")?;
     require(
-        flags.bus_over_limit,
+        flags.bus_over_limit(),
         "latched bus overvoltage flag did not persist until acknowledgement",
     )?;
     wait_for_alert_level(alert, true, "latched ALERT acknowledgement")?;
@@ -590,7 +590,7 @@ where
         .take_diagnostic_flags()
         .context("acknowledge conversion-ready ALERT")?;
     require(
-        flags.conversion_ready,
+        flags.conversion_ready(),
         "ALERT asserted without the conversion-ready flag",
     )?;
     wait_for_alert_level(alert, true, "conversion-ready ALERT acknowledgement")?;
@@ -656,12 +656,12 @@ where
     };
 
     let asserted = match case {
-        AlertThresholdCase::ShuntOvervoltage => flags.shunt_over_limit,
-        AlertThresholdCase::ShuntUndervoltage => flags.shunt_under_limit,
-        AlertThresholdCase::BusOvervoltage => flags.bus_over_limit,
-        AlertThresholdCase::BusUndervoltage => flags.bus_under_limit,
-        AlertThresholdCase::Temperature => flags.temp_over_limit,
-        AlertThresholdCase::Power => flags.power_over_limit,
+        AlertThresholdCase::ShuntOvervoltage => flags.shunt_over_limit(),
+        AlertThresholdCase::ShuntUndervoltage => flags.shunt_under_limit(),
+        AlertThresholdCase::BusOvervoltage => flags.bus_over_limit(),
+        AlertThresholdCase::BusUndervoltage => flags.bus_under_limit(),
+        AlertThresholdCase::Temperature => flags.temp_over_limit(),
+        AlertThresholdCase::Power => flags.power_over_limit(),
     };
     require(asserted, format!("{} flag did not assert", case.name()))
 }
@@ -696,7 +696,7 @@ where
         .take_diagnostic_flags()
         .context("read cleared transparent ALERT flags")?;
     require(
-        !flags.bus_over_limit,
+        !flags.bus_over_limit(),
         "transparent bus overvoltage flag remained set after the condition cleared",
     )?;
     ina.configure_alerts(AlertConfig::default())
@@ -812,7 +812,7 @@ where
         let flags = ina
             .take_diagnostic_flags()
             .context("poll conversion-ready")?;
-        if flags.conversion_ready {
+        if flags.conversion_ready() {
             return Ok(ConversionObservation {
                 flags,
                 elapsed: started.elapsed(),
@@ -837,7 +837,7 @@ where
             .take_diagnostic_flags()
             .context("poll for unexpected conversion-ready")?;
         require(
-            !flags.conversion_ready,
+            !flags.conversion_ready(),
             format!("{case}: triggered mode produced another conversion"),
         )?;
         thread::sleep(Duration::from_millis(1));
@@ -874,22 +874,22 @@ fn timing_wait_timeout(expected: Duration) -> Duration {
 }
 
 fn validate_clean_diagnostics(flags: DiagnosticFlags) -> TestResult {
-    require(flags.memory_ok, "device memory checksum is invalid")?;
-    require(!flags.energy_overflow, "unexpected energy overflow")?;
-    require(!flags.math_overflow, "unexpected math overflow")?;
-    require(!flags.temp_over_limit, "unexpected temperature alert")?;
+    require(flags.memory_ok(), "device memory checksum is invalid")?;
+    require(!flags.energy_overflow(), "unexpected energy overflow")?;
+    require(!flags.math_overflow(), "unexpected math overflow")?;
+    require(!flags.temp_over_limit(), "unexpected temperature alert")?;
     require(
-        !flags.shunt_over_limit,
+        !flags.shunt_over_limit(),
         "unexpected shunt overvoltage alert",
     )?;
     require(
-        !flags.shunt_under_limit,
+        !flags.shunt_under_limit(),
         "unexpected shunt undervoltage alert",
     )?;
-    require(!flags.bus_over_limit, "unexpected bus overvoltage alert")?;
-    require(!flags.bus_under_limit, "unexpected bus undervoltage alert")?;
-    require(!flags.power_over_limit, "unexpected power alert")?;
-    require(!flags.charge_overflow, "unexpected charge overflow")
+    require(!flags.bus_over_limit(), "unexpected bus overvoltage alert")?;
+    require(!flags.bus_under_limit(), "unexpected bus undervoltage alert")?;
+    require(!flags.power_over_limit(), "unexpected power alert")?;
+    require(!flags.charge_overflow(), "unexpected charge overflow")
 }
 
 fn read_uncalibrated_measurements<I2C>(ina: &mut Ina228<I2C>) -> TestResult<Measurements>
@@ -960,10 +960,10 @@ fn validate_snapshot(
         charge_coulombs.is_finite(),
         format!("invalid accumulated charge {charge_coulombs} C"),
     )?;
-    require(flags.memory_ok, "memory checksum failed during snapshot")?;
-    require(!flags.energy_overflow, "energy accumulator overflowed")?;
-    require(!flags.charge_overflow, "charge accumulator overflowed")?;
-    require(!flags.math_overflow, "device math overflowed")
+    require(flags.memory_ok(), "memory checksum failed during snapshot")?;
+    require(!flags.energy_overflow(), "energy accumulator overflowed")?;
+    require(!flags.charge_overflow(), "charge accumulator overflowed")?;
+    require(!flags.math_overflow(), "device math overflowed")
 }
 
 fn set_safe_limits<I2C>(ina: &mut Ina228<I2C>) -> TestResult
@@ -993,7 +993,7 @@ where
     ina.configure(measurement_config())
         .context("restart conversion for alert check")?;
     let flags = wait_for_conversion(ina)?;
-    require(flags.memory_ok, "memory checksum failed during alert check")?;
+    require(flags.memory_ok(), "memory checksum failed during alert check")?;
     Ok(flags)
 }
 

@@ -98,13 +98,21 @@ impl AdcConfigWord {
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum ConversionTime {
+    /// 50 µs.
     Us50 = 0,
+    /// 84 µs.
     Us84 = 1,
+    /// 150 µs.
     Us150 = 2,
+    /// 280 µs.
     Us280 = 3,
+    /// 540 µs.
     Us540 = 4,
+    /// 1052 µs.
     Us1052 = 5,
+    /// 2074 µs.
     Us2074 = 6,
+    /// 4120 µs.
     Us4120 = 7,
 }
 
@@ -112,13 +120,21 @@ pub enum ConversionTime {
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum AveragingCount {
+    /// No averaging: one sample per result.
     N1 = 0,
+    /// 4 samples.
     N4 = 1,
+    /// 16 samples.
     N16 = 2,
+    /// 64 samples.
     N64 = 3,
+    /// 128 samples.
     N128 = 4,
+    /// 256 samples.
     N256 = 5,
+    /// 512 samples.
     N512 = 6,
+    /// 1024 samples.
     N1024 = 7,
 }
 
@@ -127,19 +143,34 @@ pub enum AveragingCount {
 #[derive(Debug, Clone, Copy)]
 #[repr(u16)]
 pub enum OperatingMode {
+    /// Powered down; no conversions and no current draw from the ADC.
     Shutdown = 0x0,
+    /// One shot: bus voltage.
     TriggeredBus = 0x1,
+    /// One shot: shunt voltage.
     TriggeredShunt = 0x2,
+    /// One shot: bus and shunt voltage.
     TriggeredBusShunt = 0x3,
+    /// One shot: die temperature.
     TriggeredTemp = 0x4,
+    /// One shot: die temperature and bus voltage.
     TriggeredTempBus = 0x5,
+    /// One shot: die temperature and shunt voltage.
     TriggeredTempShunt = 0x6,
+    /// One shot: bus voltage, shunt voltage, and die temperature.
     TriggeredAll = 0x7,
+    /// Continuous: bus voltage.
     ContinuousBus = 0x9,
+    /// Continuous: shunt voltage.
     ContinuousShunt = 0xA,
+    /// Continuous: bus and shunt voltage.
     ContinuousBusShunt = 0xB,
+    /// Continuous: die temperature.
     ContinuousTemp = 0xC,
+    /// Continuous: die temperature and bus voltage.
     ContinuousTempBus = 0xD,
+    /// Continuous: die temperature and shunt voltage.
     ContinuousTempShunt = 0xE,
+    /// Continuous: bus voltage, shunt voltage, and die temperature.
     ContinuousAll = 0xF,
 }

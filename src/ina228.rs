@@ -53,7 +53,10 @@ pub struct Ina228<I2C> {
 /// [`Ina228::take_accumulator_snapshot`].
 #[derive(Debug, Clone, Copy)]
 pub struct AccumulatorSnapshot {
+    /// Energy accumulated since the last [`Ina228::reset_accumulators`], in Joules.
     pub energy_joules: f64,
+    /// Charge accumulated since the last [`Ina228::reset_accumulators`], in Coulombs.
+    /// Negative when current flowed in the reverse direction.
     pub charge_coulombs: f64,
     /// Flags captured before reading ENERGY and CHARGE clears their overflow indicators.
     pub diagnostic_flags: DiagnosticFlags,
@@ -273,7 +276,7 @@ impl<I2C: I2c> Ina228<I2C> {
     ///
     /// This acknowledges conversion-ready and, in latched mode, threshold alert flags.
     pub fn take_diagnostic_flags(&mut self) -> Result<DiagnosticFlags, Error<I2C::Error>> {
-        Ok(DiagnosticFlags::from_bits(
+        Ok(DiagnosticFlags::from_device(
             self.read_u16(Register::DiagAlrt)?,
         ))
     }

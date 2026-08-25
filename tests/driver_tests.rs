@@ -547,10 +547,10 @@ fn accumulator_snapshot_reports_values_and_overflows() {
     let snapshot = ina.take_accumulator_snapshot().unwrap();
     assert_eq!(snapshot.energy_joules, 10.0);
     assert_eq!(snapshot.charge_coulombs, 10.0);
-    assert!(snapshot.diagnostic_flags.memory_ok);
-    assert!(snapshot.diagnostic_flags.conversion_ready);
-    assert!(snapshot.diagnostic_flags.energy_overflow);
-    assert!(snapshot.diagnostic_flags.charge_overflow);
+    assert!(snapshot.diagnostic_flags.memory_ok());
+    assert!(snapshot.diagnostic_flags.conversion_ready());
+    assert!(snapshot.diagnostic_flags.energy_overflow());
+    assert!(snapshot.diagnostic_flags.charge_overflow());
     ina.release().done();
 
     let negative_charge_raw = ((-524_288_i64) as u64) & 0xFF_FFFF_FFFF;
@@ -567,8 +567,8 @@ fn accumulator_snapshot_reports_values_and_overflows() {
     let snapshot = ina.take_accumulator_snapshot().unwrap();
     assert_eq!(snapshot.energy_joules, 0.0);
     assert_eq!(snapshot.charge_coulombs, -10.0);
-    assert!(!snapshot.diagnostic_flags.energy_overflow);
-    assert!(!snapshot.diagnostic_flags.charge_overflow);
+    assert!(!snapshot.diagnostic_flags.energy_overflow());
+    assert!(!snapshot.diagnostic_flags.charge_overflow());
     ina.release().done();
 }
 
@@ -593,7 +593,7 @@ fn accumulator_snapshot_requires_continuous_mode() {
             let snapshot = result.unwrap();
             assert_eq!(snapshot.energy_joules, 0.0);
             assert_eq!(snapshot.charge_coulombs, 0.0);
-            assert!(snapshot.diagnostic_flags.memory_ok);
+            assert!(snapshot.diagnostic_flags.memory_ok());
         } else {
             assert!(matches!(
                 result,
@@ -649,7 +649,7 @@ fn accumulator_snapshot_propagates_capture_and_restore_failures() {
             // capture is handed back rather than dropped with the restore error.
             assert_eq!(snapshot.energy_joules, 0.0);
             assert_eq!(snapshot.charge_coulombs, 0.0);
-            assert!(snapshot.diagnostic_flags.memory_ok);
+            assert!(snapshot.diagnostic_flags.memory_ok());
         }
         other => panic!("expected NotResumed carrying the capture, got {other:?}"),
     }
@@ -820,17 +820,17 @@ fn diagnostic_flags_only_memory_ok() {
     let i2c = mock(&[read_txn(0x0B, &0x0001_u16.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     let flags = ina.take_diagnostic_flags().unwrap();
-    assert!(flags.memory_ok);
-    assert!(!flags.conversion_ready);
-    assert!(!flags.energy_overflow);
-    assert!(!flags.math_overflow);
-    assert!(!flags.temp_over_limit);
-    assert!(!flags.shunt_over_limit);
-    assert!(!flags.shunt_under_limit);
-    assert!(!flags.bus_over_limit);
-    assert!(!flags.bus_under_limit);
-    assert!(!flags.power_over_limit);
-    assert!(!flags.charge_overflow);
+    assert!(flags.memory_ok());
+    assert!(!flags.conversion_ready());
+    assert!(!flags.energy_overflow());
+    assert!(!flags.math_overflow());
+    assert!(!flags.temp_over_limit());
+    assert!(!flags.shunt_over_limit());
+    assert!(!flags.shunt_under_limit());
+    assert!(!flags.bus_over_limit());
+    assert!(!flags.bus_under_limit());
+    assert!(!flags.power_over_limit());
+    assert!(!flags.charge_overflow());
     ina.release().done();
 }
 
@@ -841,17 +841,19 @@ fn diagnostic_flags_alerts_set() {
     let i2c = mock(&[read_txn(0x0B, &diag.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     let flags = ina.take_diagnostic_flags().unwrap();
-    assert!(!flags.memory_ok);
-    assert!(flags.temp_over_limit);
-    assert!(flags.bus_over_limit);
-    assert!(flags.conversion_ready);
-    assert!(!flags.energy_overflow);
-    assert!(!flags.math_overflow);
-    assert!(!flags.shunt_over_limit);
-    assert!(!flags.shunt_under_limit);
-    assert!(!flags.bus_under_limit);
-    assert!(!flags.power_over_limit);
-    assert!(!flags.charge_overflow);
+    assert!(!flags.memory_ok());
+    assert!(flags.temp_over_limit());
+    assert!(flags.bus_over_limit());
+    assert!(flags.conversion_ready());
+    assert!(!flags.energy_overflow());
+    assert!(!flags.math_overflow());
+    assert!(!flags.shunt_over_limit());
+    assert!(!flags.shunt_under_limit());
+    assert!(!flags.bus_under_limit());
+    assert!(!flags.power_over_limit());
+    assert!(!flags.charge_overflow());
+    // The raw word survives intact, reserved bit 8 included.
+    assert_eq!(flags.bits(), diag);
     ina.release().done();
 }
 
@@ -1138,17 +1140,17 @@ fn diagnostic_flags_overflow_and_under_limits() {
     let i2c = mock(&[read_txn(0x0B, &diag.to_be_bytes())]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     let flags = ina.take_diagnostic_flags().unwrap();
-    assert!(flags.memory_ok);
-    assert!(flags.energy_overflow);
-    assert!(flags.math_overflow);
-    assert!(flags.shunt_under_limit);
-    assert!(flags.bus_under_limit);
-    assert!(flags.charge_overflow);
-    assert!(!flags.conversion_ready);
-    assert!(!flags.temp_over_limit);
-    assert!(!flags.shunt_over_limit);
-    assert!(!flags.bus_over_limit);
-    assert!(!flags.power_over_limit);
+    assert!(flags.memory_ok());
+    assert!(flags.energy_overflow());
+    assert!(flags.math_overflow());
+    assert!(flags.shunt_under_limit());
+    assert!(flags.bus_under_limit());
+    assert!(flags.charge_overflow());
+    assert!(!flags.conversion_ready());
+    assert!(!flags.temp_over_limit());
+    assert!(!flags.shunt_over_limit());
+    assert!(!flags.bus_over_limit());
+    assert!(!flags.power_over_limit());
     ina.release().done();
 }
 

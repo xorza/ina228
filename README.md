@@ -36,7 +36,7 @@ ina.calibrate(10.0, 0.002).unwrap();
 // Polling acknowledges every snapshot; production code must handle every returned flag.
 loop {
     let flags = ina.take_diagnostic_flags().unwrap();
-    if flags.conversion_ready {
+    if flags.conversion_ready() {
         break;
     }
 }
