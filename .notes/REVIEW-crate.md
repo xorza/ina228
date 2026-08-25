@@ -17,9 +17,9 @@ rewritten to fit whatever shape production takes.
       state on an MCU target.
 - [ ] Ten of `DiagnosticFlags`'s eleven public fields are undocumented
       (`src/diag_alrt.rs:53-65`); only `memory_ok` has a `///`. Two of
-      `AccumulatorSnapshot`'s three are undocumented (`src/ina228.rs:79-80`). All variants
+      `AccumulatorSnapshot`'s three are undocumented (`src/ina228.rs:56-57`). All variants
       of `ConversionTime`, `AveragingCount`, and `OperatingMode` are undocumented
-      (`src/adc_config.rs:11-56`) — `TriggeredTempBus` vs `TriggeredTempShunt` is not
+      (`src/adc_config.rs:100-145`) — `TriggeredTempBus` vs `TriggeredTempShunt` is not
       self-explaining. The crate has no `#![deny(missing_docs)]` to catch this.
 - [ ] The `AlertConfig` example is a ```` ```ignore ```` doctest (`src/diag_alrt.rs:11`) —
       never compiled, free to rot.
@@ -39,7 +39,7 @@ rewritten to fit whatever shape production takes.
 
 ## Read-back and identity gaps push work onto callers
 
-- [ ] `device_id` and `die_revision` (`src/ina228.rs:370-377`) each issue a separate I2C read
+- [ ] `device_id` and `die_revision` (`src/ina228.rs:347-354`) each issue a separate I2C read
       of the same register 0x3F; a caller wanting both pays two transactions for two
       halves of one word.
 - [ ] `MANUFACTURER_ID` and `DEVICE_ID` are exported but never used by the driver, so the
@@ -50,10 +50,10 @@ rewritten to fit whatever shape production takes.
       ADC_CONFIG as an `AdcConfig`, nor of the raw DIAG_ALRT word.
 - [ ] The only way to poll for conversion-ready is `take_diagnostic_flags`, which
       acknowledges every other latched threshold alert as a side effect
-      (`src/ina228.rs:298`). The README's own polling loop demonstrates the hazard and warns
+      (`src/ina228.rs:275`). The README's own polling loop demonstrates the hazard and warns
       about it in a comment rather than the API preventing it.
 - [ ] `set_adc_range` clobbers SOVL and SUVL to their extremes and never restores them
-      (`src/ina228.rs:147-148`), discarding caller configuration the driver has enough
+      (`src/ina228.rs:124-125`), discarding caller configuration the driver has enough
       information to rescale — both shunt limit LSBs are already known to `AdcRange`.
 - [ ] `configure` writes ADC_CONFIG (register 0x01) but is named for the CONFIG register
       (0x00) that it does not touch; the register actually called CONFIG is written by

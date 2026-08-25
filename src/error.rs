@@ -2,7 +2,7 @@
 
 use embedded_hal::i2c::I2c;
 
-use crate::AccumulatorSnapshot;
+use crate::ina228::AccumulatorSnapshot;
 
 /// Invalid physical configuration supplied to the driver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

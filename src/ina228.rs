@@ -18,29 +18,6 @@ pub const MANUFACTURER_ID: u16 = 0x5449;
 /// Device ID (upper 12 bits of register 0x3F; lower 4 bits are die revision).
 pub const DEVICE_ID: u16 = 0x228;
 
-/// Widens a `bits`-wide two's-complement value to a full `i64`.
-fn sign_extend(value: u64, bits: u32) -> i64 {
-    let shift = u64::BITS - bits;
-    ((value << shift) as i64) >> shift
-}
-
-fn encode_signed(value: f32, lsb: f64) -> Result<u16, ConfigurationError> {
-    let raw = value as f64 / lsb;
-    if !raw.is_finite() || raw <= i16::MIN as f64 - 0.5 || raw >= i16::MAX as f64 + 0.5 {
-        return Err(ConfigurationError::Unrepresentable);
-    }
-    let rounded = if raw >= 0.0 { raw + 0.5 } else { raw - 0.5 };
-    Ok(rounded as i16 as u16)
-}
-
-fn encode_unsigned(value: f32, lsb: f64, max_raw: u16) -> Result<u16, ConfigurationError> {
-    let raw = value as f64 / lsb;
-    if !raw.is_finite() || raw < 0.0 || raw >= max_raw as f64 + 0.5 {
-        return Err(ConfigurationError::Unrepresentable);
-    }
-    Ok((raw + 0.5) as u16)
-}
-
 /// INA228 high-precision digital power monitor driver.
 ///
 /// Measures bus and shunt voltage, current, power, energy, and charge over I2C. Valid
@@ -495,4 +472,27 @@ impl<I2C: I2c> Ina228<I2C> {
     fn read_i40(&mut self, reg: Register) -> Result<i64, I2C::Error> {
         Ok(sign_extend(self.read_u40(reg)?, 40))
     }
+}
+
+/// Widens a `bits`-wide two's-complement value to a full `i64`.
+fn sign_extend(value: u64, bits: u32) -> i64 {
+    let shift = u64::BITS - bits;
+    ((value << shift) as i64) >> shift
+}
+
+fn encode_signed(value: f32, lsb: f64) -> Result<u16, ConfigurationError> {
+    let raw = value as f64 / lsb;
+    if !raw.is_finite() || raw <= i16::MIN as f64 - 0.5 || raw >= i16::MAX as f64 + 0.5 {
+        return Err(ConfigurationError::Unrepresentable);
+    }
+    let rounded = if raw >= 0.0 { raw + 0.5 } else { raw - 0.5 };
+    Ok(rounded as i16 as u16)
+}
+
+fn encode_unsigned(value: f32, lsb: f64, max_raw: u16) -> Result<u16, ConfigurationError> {
+    let raw = value as f64 / lsb;
+    if !raw.is_finite() || raw < 0.0 || raw >= max_raw as f64 + 0.5 {
+        return Err(ConfigurationError::Unrepresentable);
+    }
+    Ok((raw + 0.5) as u16)
 }

@@ -4,56 +4,8 @@
 //! it. Keeping both here puts every ADC_CONFIG field position in one file, and lets the
 //! questions the driver asks about a read-back word — is the ADC stopped, do the
 //! accumulators run — be named once instead of re-derived from raw bits at each site.
-
-/// ADC conversion time per sample.
-#[derive(Debug, Clone, Copy)]
-#[repr(u16)]
-pub enum ConversionTime {
-    Us50 = 0,
-    Us84 = 1,
-    Us150 = 2,
-    Us280 = 3,
-    Us540 = 4,
-    Us1052 = 5,
-    Us2074 = 6,
-    Us4120 = 7,
-}
-
-/// Number of ADC samples to average per conversion result.
-#[derive(Debug, Clone, Copy)]
-#[repr(u16)]
-pub enum AveragingCount {
-    N1 = 0,
-    N4 = 1,
-    N16 = 2,
-    N64 = 3,
-    N128 = 4,
-    N256 = 5,
-    N512 = 6,
-    N1024 = 7,
-}
-
-/// ADC operating mode: selects which channels to measure and whether to
-/// run continuously or in single-shot (triggered) mode.
-#[derive(Debug, Clone, Copy)]
-#[repr(u16)]
-pub enum OperatingMode {
-    Shutdown = 0x0,
-    TriggeredBus = 0x1,
-    TriggeredShunt = 0x2,
-    TriggeredBusShunt = 0x3,
-    TriggeredTemp = 0x4,
-    TriggeredTempBus = 0x5,
-    TriggeredTempShunt = 0x6,
-    TriggeredAll = 0x7,
-    ContinuousBus = 0x9,
-    ContinuousShunt = 0xA,
-    ContinuousBusShunt = 0xB,
-    ContinuousTemp = 0xC,
-    ContinuousTempBus = 0xD,
-    ContinuousTempShunt = 0xE,
-    ContinuousAll = 0xF,
-}
+//! [`OperatingMode`], [`ConversionTime`], and [`AveragingCount`] are the fields
+//! [`AdcConfig`] is built from, so they live here too.
 
 /// ADC operating mode, conversion times, and averaging configuration.
 ///
@@ -140,4 +92,54 @@ impl AdcConfigWord {
     pub(crate) fn accumulates(self) -> bool {
         self.0 & Self::MODE_MASK >= Self::FIRST_CONTINUOUS
     }
+}
+
+/// ADC conversion time per sample.
+#[derive(Debug, Clone, Copy)]
+#[repr(u16)]
+pub enum ConversionTime {
+    Us50 = 0,
+    Us84 = 1,
+    Us150 = 2,
+    Us280 = 3,
+    Us540 = 4,
+    Us1052 = 5,
+    Us2074 = 6,
+    Us4120 = 7,
+}
+
+/// Number of ADC samples to average per conversion result.
+#[derive(Debug, Clone, Copy)]
+#[repr(u16)]
+pub enum AveragingCount {
+    N1 = 0,
+    N4 = 1,
+    N16 = 2,
+    N64 = 3,
+    N128 = 4,
+    N256 = 5,
+    N512 = 6,
+    N1024 = 7,
+}
+
+/// ADC operating mode: selects which channels to measure and whether to
+/// run continuously or in single-shot (triggered) mode.
+#[derive(Debug, Clone, Copy)]
+#[repr(u16)]
+pub enum OperatingMode {
+    Shutdown = 0x0,
+    TriggeredBus = 0x1,
+    TriggeredShunt = 0x2,
+    TriggeredBusShunt = 0x3,
+    TriggeredTemp = 0x4,
+    TriggeredTempBus = 0x5,
+    TriggeredTempShunt = 0x6,
+    TriggeredAll = 0x7,
+    ContinuousBus = 0x9,
+    ContinuousShunt = 0xA,
+    ContinuousBusShunt = 0xB,
+    ContinuousTemp = 0xC,
+    ContinuousTempBus = 0xD,
+    ContinuousTempShunt = 0xE,
+    ContinuousAll = 0xF,
 }
