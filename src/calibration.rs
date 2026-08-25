@@ -1,7 +1,7 @@
 //! Scale factors derived from the caller's shunt and expected-current figures.
 
+use crate::adc_range::AdcRange;
 use crate::error::ConfigurationError;
-use crate::registers::AdcRange;
 use crate::scale;
 
 /// Current scale derived from a calibration, with both fields finite and positive.

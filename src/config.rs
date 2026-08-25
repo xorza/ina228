@@ -6,7 +6,7 @@
 //! RSTACC. The two self-clearing commands are plain `u16` words instead, so no caller can
 //! store one by mistake.
 
-use crate::registers::AdcRange;
+use crate::adc_range::AdcRange;
 
 /// A CONFIG value the device holds between operations.
 ///
