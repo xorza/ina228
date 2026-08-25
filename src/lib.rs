@@ -1,13 +1,17 @@
 #![no_std]
 
+mod calibration;
 mod config;
+mod error;
 mod registers;
 mod scale;
 
+use calibration::Calibration;
 use config::Config;
 use embedded_hal::i2c::I2c;
 use registers::{Register, adc_config, diagnostic_alert};
 
+pub use error::{ConfigurationError, Error, InitializationError};
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
 /// Default I2C address (A0=GND, A1=GND).
@@ -16,109 +20,6 @@ pub const DEFAULT_ADDRESS: u8 = 0x40;
 pub const MANUFACTURER_ID: u16 = 0x5449;
 /// Device ID (upper 12 bits of register 0x3F; lower 4 bits are die revision).
 pub const DEVICE_ID: u16 = 0x228;
-
-/// Invalid physical configuration supplied to the driver.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigurationError {
-    /// Maximum expected current must be finite and positive.
-    MaxCurrent,
-    /// Shunt resistance must be finite and positive.
-    ShuntResistance,
-    /// Calibration cannot be represented for the selected ADC range.
-    Calibration,
-    /// A value cannot be represented by the register it targets.
-    ///
-    /// Every method that reports this takes one physical argument, so the call itself
-    /// says which value was rejected.
-    Unrepresentable,
-    /// Energy and charge accumulators are invalid outside continuous conversion modes.
-    AccumulatorMode,
-}
-
-/// INA228 operation error.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Error<E> {
-    /// I2C bus operation failed.
-    I2c(E),
-    /// A physical configuration value is invalid or unrepresentable.
-    InvalidConfiguration(ConfigurationError),
-}
-
-impl<E> From<E> for Error<E> {
-    fn from(error: E) -> Self {
-        Self::I2c(error)
-    }
-}
-
-/// Failure returned while constructing an [`Ina228`].
-#[derive(Debug)]
-pub enum InitializationError<I2C: I2c> {
-    /// The supplied address is outside the INA228 address range.
-    InvalidAddress {
-        /// I2C bus returned to the caller for recovery or retry.
-        i2c: I2C,
-        /// Invalid address supplied by the caller.
-        address: u8,
-    },
-    /// Reading CONFIG from the device failed.
-    I2c {
-        /// I2C bus returned to the caller for recovery or retry.
-        i2c: I2C,
-        /// Error reported by the I2C bus.
-        error: I2C::Error,
-    },
-}
-
-/// Current scale derived from a calibration, with both fields finite and positive.
-///
-/// [`Calibration::new`] is the only way to build one, so the arithmetic below never has
-/// to re-check for a non-finite operand.
-#[derive(Debug, Clone, Copy)]
-struct Calibration {
-    current_lsb: f64,
-    shunt_resistance_ohm: f64,
-}
-
-impl Calibration {
-    fn new(max_current_a: f32, shunt_resistance_ohm: f32) -> Result<Self, ConfigurationError> {
-        if !max_current_a.is_finite() || max_current_a <= 0.0 {
-            return Err(ConfigurationError::MaxCurrent);
-        }
-        if !shunt_resistance_ohm.is_finite() || shunt_resistance_ohm <= 0.0 {
-            return Err(ConfigurationError::ShuntResistance);
-        }
-        Ok(Self {
-            current_lsb: max_current_a as f64 / scale::SIGNED_20_BIT_FULL_SCALE,
-            shunt_resistance_ohm: shunt_resistance_ohm as f64,
-        })
-    }
-
-    fn shunt_cal(self, adc_range: AdcRange) -> Result<u16, ConfigurationError> {
-        let max_shunt_voltage =
-            self.current_lsb * scale::SIGNED_20_BIT_FULL_SCALE * self.shunt_resistance_ohm;
-        if max_shunt_voltage >= adc_range.full_scale_voltage() {
-            return Err(ConfigurationError::Calibration);
-        }
-
-        let exact = adc_range.shunt_cal_scale() * self.current_lsb * self.shunt_resistance_ohm;
-        // Both bounds sit half a count out because they constrain the rounded code, which
-        // SHUNT_CAL requires to land in 1..=UNSIGNED_15_BIT_MAX.
-        const MIN_CODE: f64 = 1.0;
-        let max_code = scale::UNSIGNED_15_BIT_MAX as f64;
-        if exact < MIN_CODE - 0.5 || exact >= max_code + 0.5 {
-            return Err(ConfigurationError::Calibration);
-        }
-        Ok((exact + 0.5) as u16)
-    }
-
-    fn power_lsb(self) -> f64 {
-        scale::POWER_LSB_MULTIPLIER * self.current_lsb
-    }
-
-    fn energy_lsb(self) -> f64 {
-        scale::ENERGY_LSB_MULTIPLIER * self.power_lsb()
-    }
-}
 
 fn encode_signed(value: f32, lsb: f64) -> Result<u16, ConfigurationError> {
     let raw = value as f64 / lsb;
@@ -391,7 +292,7 @@ impl<I2C: I2c> Ina228<I2C> {
             .calibration
             .expect("call calibrate() before reading current");
         let raw = self.read_i20(Register::Current)?;
-        Ok((raw as f64 * calibration.current_lsb) as f32)
+        Ok((raw as f64 * calibration.current_lsb()) as f32)
     }
 
     /// Returns power in Watts. Requires prior [`calibrate`](Self::calibrate) call.
@@ -426,7 +327,7 @@ impl<I2C: I2c> Ina228<I2C> {
             let charge_raw = driver.read_i40(Register::Charge)?;
             Ok(AccumulatorSnapshot {
                 energy_joules: energy_raw as f64 * calibration.energy_lsb(),
-                charge_coulombs: charge_raw as f64 * calibration.current_lsb,
+                charge_coulombs: charge_raw as f64 * calibration.current_lsb(),
                 diagnostic_flags,
             })
         })
