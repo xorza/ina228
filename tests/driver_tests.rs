@@ -608,6 +608,8 @@ fn accumulator_snapshot_propagates_capture_and_restore_failures() {
         read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
         write_txn(0x01, SHUTDOWN_ADC_CONFIG),
         read_txn(0x0B, &[0, 0]).with_error(ErrorKind::Bus),
+        // The failed capture still restores the mode; the read error is what propagates.
+        write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let i2c = mock(&transactions);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
@@ -706,6 +708,7 @@ fn set_temp_compensation_propagates_write_failures() {
         read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
         write_txn(0x01, SHUTDOWN_ADC_CONFIG),
         failed_coefficient,
+        write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     assert_eq!(
@@ -721,6 +724,7 @@ fn set_temp_compensation_propagates_write_failures() {
         write_txn(0x01, SHUTDOWN_ADC_CONFIG),
         write_txn(0x03, 15),
         failed_enable,
+        write_txn(0x01, DEFAULT_ADC_CONFIG),
     ]);
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     assert_eq!(

@@ -73,7 +73,7 @@ Output registers retain the previous completed values until a new conversion rep
 
 `take_diagnostic_flags()` reads and acknowledges DIAG_ALRT, including conversion-ready and any latched threshold alerts. `take_accumulator_snapshot()` is available only in continuous conversion modes, where TI defines ENERGY and CHARGE as valid. It briefly suspends conversions so DIAG_ALRT, ENERGY, and CHARGE form a coherent snapshot, creating a short gap during which no energy or charge is accumulated. Restoring the continuous mode starts a fresh conversion and clears the device's conversion-ready flag; the returned snapshot retains the status captured before suspension.
 
-If an accumulator snapshot fails after suspension, the ADC may remain in shutdown mode and earlier clear-on-read effects may already have occurred. Apply the same reset-or-reconstruct rule before further scaled operations.
+Every method that suspends conversions restores the previous ADC configuration whether or not the work inside succeeds, so a failure cannot leave the ADC shut down. A failed snapshot still loses whatever the completed reads already acknowledged or cleared, because those effects happen on read.
 
 Fallible methods return `Error<I2C::Error>`. Invalid, non-finite, or unrepresentable physical configuration values and accumulator reads outside continuous mode return `Error::InvalidConfiguration`; bus failures return `Error::I2c`. Thresholds are rounded to the nearest register value.
 

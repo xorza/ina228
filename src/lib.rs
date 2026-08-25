@@ -78,12 +78,6 @@ struct Calibration {
     shunt_resistance_ohm: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SuspendedConversions {
-    adc_config: u16,
-    resume: bool,
-}
-
 impl Calibration {
     fn shunt_cal(self, adc_range: AdcRange) -> Result<u16, ConfigurationError> {
         let max_shunt_voltage =
@@ -300,21 +294,17 @@ impl<I2C: I2c> Ina228<I2C> {
             .transpose()
             .map_err(Error::InvalidConfiguration)?;
         let config_value = self.read_u16(Register::Config)?;
-        let suspended = self.suspend_conversions()?;
-
-        self.write_u16(Register::Sovl, i16::MAX as u16)?;
-        self.write_u16(Register::Suvl, i16::MIN as u16)?;
-
-        let value = range.apply_to_config(config_value);
-        self.write_u16(Register::Config, value)?;
-
-        if let Some(shunt_cal) = shunt_cal {
-            self.write_u16(Register::ShuntCal, shunt_cal)?;
-        }
-
-        self.restore_conversions(suspended)?;
-        self.adc_range = range;
-        Ok(())
+        let adc_config = self.read_u16(Register::AdcConfig)?;
+        self.with_conversions_suspended(adc_config, |driver| {
+            driver.write_u16(Register::Sovl, i16::MAX as u16)?;
+            driver.write_u16(Register::Suvl, i16::MIN as u16)?;
+            driver.write_u16(Register::Config, range.apply_to_config(config_value))?;
+            if let Some(shunt_cal) = shunt_cal {
+                driver.write_u16(Register::ShuntCal, shunt_cal)?;
+            }
+            driver.adc_range = range;
+            Ok(())
+        })
     }
 
     /// Calibrate for current, power, energy, and charge measurement.
@@ -329,8 +319,10 @@ impl<I2C: I2c> Ina228<I2C> {
     /// If the previous mode was shutdown, call [`configure`](Self::configure) before
     /// waiting for fresh data.
     ///
-    /// If an I2C failure occurs after conversions are suspended, reset or reconstruct
-    /// the driver before performing further scaled operations.
+    /// The previous ADC configuration is restored even if a write inside the suspended
+    /// window fails, so the ADC is never left shut down; the write that failed still
+    /// cannot prove whether the device accepted it, so reset or reconstruct the driver
+    /// before performing further scaled operations.
     ///
     /// The maximum shunt voltage must be strictly below the selected ADC range's
     /// positive full-scale endpoint.
@@ -359,13 +351,14 @@ impl<I2C: I2c> Ina228<I2C> {
         let shunt_cal = calibration
             .shunt_cal(adc_range)
             .map_err(Error::InvalidConfiguration)?;
-        let suspended = self.suspend_conversions()?;
-        self.write_u16(Register::ShuntCal, shunt_cal)?;
-        self.reset_accumulators()?;
-        self.write_u16(Register::PwrLimit, u16::MAX)?;
-        self.restore_conversions(suspended)?;
-        self.calibration = Some(calibration);
-        Ok(())
+        let adc_config = self.read_u16(Register::AdcConfig)?;
+        self.with_conversions_suspended(adc_config, |driver| {
+            driver.write_u16(Register::ShuntCal, shunt_cal)?;
+            driver.reset_accumulators()?;
+            driver.write_u16(Register::PwrLimit, u16::MAX)?;
+            driver.calibration = Some(calibration);
+            Ok(())
+        })
     }
 
     /// Enables shunt temperature compensation with a coefficient from 0 to 16383 ppm/°C.
@@ -384,13 +377,14 @@ impl<I2C: I2c> Ina228<I2C> {
             ));
         }
         let config_value = self.read_u16(Register::Config)?;
-        let suspended = self.suspend_conversions()?;
-        self.write_u16(Register::ShuntTempco, tempco_ppm)?;
-        self.write_u16(
-            Register::Config,
-            config_value | config::TEMPERATURE_COMPENSATION,
-        )?;
-        self.restore_conversions(suspended)
+        let adc_config = self.read_u16(Register::AdcConfig)?;
+        self.with_conversions_suspended(adc_config, |driver| {
+            driver.write_u16(Register::ShuntTempco, tempco_ppm)?;
+            driver.write_u16(
+                Register::Config,
+                config_value | config::TEMPERATURE_COMPENSATION,
+            )
+        })
     }
 
     /// Disables shunt temperature compensation while conversions are suspended.
@@ -403,12 +397,13 @@ impl<I2C: I2c> Ina228<I2C> {
     /// scaled operations.
     pub fn disable_temp_compensation(&mut self) -> Result<(), Error<I2C::Error>> {
         let config_value = self.read_u16(Register::Config)?;
-        let suspended = self.suspend_conversions()?;
-        self.write_u16(
-            Register::Config,
-            config_value & !config::TEMPERATURE_COMPENSATION,
-        )?;
-        self.restore_conversions(suspended)
+        let adc_config = self.read_u16(Register::AdcConfig)?;
+        self.with_conversions_suspended(adc_config, |driver| {
+            driver.write_u16(
+                Register::Config,
+                config_value & !config::TEMPERATURE_COMPENSATION,
+            )
+        })
     }
 
     /// Returns bus voltage in Volts.
@@ -450,10 +445,9 @@ impl<I2C: I2c> Ina228<I2C> {
     /// suspension creates a brief gap during which energy and charge are not accumulated.
     ///
     /// Reading DIAG_ALRT acknowledges conversion-ready and any latched threshold alerts.
-    /// Reading ENERGY and CHARGE clears their respective overflow indicators. If an I2C
-    /// operation fails after suspension, the ADC may remain in shutdown mode and earlier
-    /// acknowledgement or clear-on-read effects may already have occurred. Reset or
-    /// reconstruct the driver before performing further scaled operations.
+    /// Reading ENERGY and CHARGE clears their respective overflow indicators. A capture
+    /// that fails part-way loses whatever those reads already consumed, and the previous
+    /// ADC configuration is restored regardless, so the ADC is not left shut down.
     pub fn take_accumulator_snapshot(&mut self) -> Result<AccumulatorSnapshot, Error<I2C::Error>> {
         let calibration = self
             .calibration
@@ -465,17 +459,16 @@ impl<I2C: I2c> Ina228<I2C> {
                 ConfigurationError::AccumulatorMode,
             ));
         }
-        let suspended = self.suspend_captured_conversions(adc_config)?;
-        let diagnostic_flags = self.take_diagnostic_flags()?;
-        let energy_raw = self.read_u40(Register::Energy)?;
-        let charge_raw = self.read_i40(Register::Charge)?;
-        let snapshot = AccumulatorSnapshot {
-            energy_joules: energy_raw as f64 * calibration.energy_lsb(),
-            charge_coulombs: charge_raw as f64 * calibration.current_lsb,
-            diagnostic_flags,
-        };
-        self.restore_conversions(suspended)?;
-        Ok(snapshot)
+        self.with_conversions_suspended(adc_config, |driver| {
+            let diagnostic_flags = driver.take_diagnostic_flags()?;
+            let energy_raw = driver.read_u40(Register::Energy)?;
+            let charge_raw = driver.read_i40(Register::Charge)?;
+            Ok(AccumulatorSnapshot {
+                energy_joules: energy_raw as f64 * calibration.energy_lsb(),
+                charge_coulombs: charge_raw as f64 * calibration.current_lsb,
+                diagnostic_flags,
+            })
+        })
     }
 
     /// Returns die temperature in degrees Celsius.
@@ -623,31 +616,25 @@ impl<I2C: I2c> Ina228<I2C> {
         self.i2c
     }
 
-    fn suspend_conversions(&mut self) -> Result<SuspendedConversions, Error<I2C::Error>> {
-        let adc_config = self.read_u16(Register::AdcConfig)?;
-        self.suspend_captured_conversions(adc_config)
-    }
-
-    fn suspend_captured_conversions(
+    /// Runs `body` with conversions suspended, then puts `adc_config` back.
+    ///
+    /// The restore is attempted whether or not `body` succeeds, so no failure inside the
+    /// suspended window can leave the ADC shut down. A `body` error wins over a restore
+    /// error: it happened first and says what actually went wrong. Both shutdown
+    /// encodings are already stopped, so they run `body` with no writes at all.
+    fn with_conversions_suspended<T>(
         &mut self,
         adc_config: u16,
-    ) -> Result<SuspendedConversions, Error<I2C::Error>> {
+        body: impl FnOnce(&mut Self) -> Result<T, Error<I2C::Error>>,
+    ) -> Result<T, Error<I2C::Error>> {
         let mode = adc_config & adc_config::MODE_MASK;
-        let resume = mode != 0 && mode != adc_config::ALTERNATE_SHUTDOWN_MODE;
-        if resume {
-            self.write_u16(Register::AdcConfig, adc_config & !adc_config::MODE_MASK)?;
+        if mode == 0 || mode == adc_config::ALTERNATE_SHUTDOWN_MODE {
+            return body(self);
         }
-        Ok(SuspendedConversions { adc_config, resume })
-    }
-
-    fn restore_conversions(
-        &mut self,
-        suspended: SuspendedConversions,
-    ) -> Result<(), Error<I2C::Error>> {
-        if suspended.resume {
-            self.write_u16(Register::AdcConfig, suspended.adc_config)?;
-        }
-        Ok(())
+        self.write_u16(Register::AdcConfig, adc_config & !adc_config::MODE_MASK)?;
+        let outcome = body(self);
+        let restored = self.write_u16(Register::AdcConfig, adc_config);
+        outcome.and_then(|value| restored.map(|()| value))
     }
 
     fn read_u16_from(i2c: &mut I2C, address: u8, reg: Register) -> Result<u16, I2C::Error> {
