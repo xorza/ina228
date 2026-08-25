@@ -25,12 +25,6 @@ pub(crate) enum Register {
     DeviceId = 0x3F,
 }
 
-pub(crate) mod adc_config {
-    pub(crate) const MODE_MASK: u16 = 0xF << 12;
-    pub(crate) const ALTERNATE_SHUTDOWN_MODE: u16 = 8 << 12;
-    pub(crate) const FIRST_CONTINUOUS_MODE: u16 = 9 << 12;
-}
-
 pub(crate) mod diagnostic_alert {
     pub(crate) const LATCH: u16 = 1 << 15;
     pub(crate) const CONVERSION_READY_ENABLE: u16 = 1 << 14;

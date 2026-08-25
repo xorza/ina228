@@ -1,16 +1,19 @@
 #![no_std]
 
+mod adc_config;
 mod calibration;
 mod config;
 mod error;
 mod registers;
 mod scale;
 
+use adc_config::AdcConfigWord;
 use calibration::Calibration;
 use config::Config;
 use embedded_hal::i2c::I2c;
-use registers::{Register, adc_config, diagnostic_alert};
+use registers::{Register, diagnostic_alert};
 
+pub use adc_config::AdcConfig;
 pub use error::{ConfigurationError, Error, InitializationError};
 pub use registers::{AdcRange, AveragingCount, ConversionTime, OperatingMode};
 
@@ -64,35 +67,6 @@ pub struct Ina228<I2C> {
     /// Live CONFIG, cached so the read-modify-write methods can skip the read. Assumes
     /// this driver is the only writer on the bus.
     config: Config,
-}
-
-/// ADC operating mode, conversion times, and averaging configuration.
-///
-/// The default matches the ADC_CONFIG reset value documented by the INA228 datasheet.
-#[derive(Debug, Clone, Copy)]
-pub struct AdcConfig {
-    /// Channels to measure and whether conversions are triggered or continuous.
-    pub mode: OperatingMode,
-    /// Bus-voltage conversion time.
-    pub bus_conversion_time: ConversionTime,
-    /// Shunt-voltage conversion time.
-    pub shunt_conversion_time: ConversionTime,
-    /// Die-temperature conversion time.
-    pub temperature_conversion_time: ConversionTime,
-    /// Number of ADC samples averaged into each result.
-    pub averaging: AveragingCount,
-}
-
-impl Default for AdcConfig {
-    fn default() -> Self {
-        Self {
-            mode: OperatingMode::ContinuousAll,
-            bus_conversion_time: ConversionTime::Us1052,
-            shunt_conversion_time: ConversionTime::Us1052,
-            temperature_conversion_time: ConversionTime::Us1052,
-            averaging: AveragingCount::N1,
-        }
-    }
 }
 
 /// Alert pin configuration written to the upper bits of DIAG_ALRT.
@@ -183,12 +157,7 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Writes ADC_CONFIG: operating mode, per-channel conversion times, and averaging.
     pub fn configure(&mut self, config: AdcConfig) -> Result<(), Error<I2C::Error>> {
-        let value = ((config.mode as u16) << 12)
-            | ((config.bus_conversion_time as u16) << 9)
-            | ((config.shunt_conversion_time as u16) << 6)
-            | ((config.temperature_conversion_time as u16) << 3)
-            | (config.averaging as u16);
-        self.write_u16(Register::AdcConfig, value)
+        self.write_u16(Register::AdcConfig, AdcConfigWord::of(config).bits())
     }
 
     /// Sets the shunt ADC full-scale range, re-writing SHUNT_CAL if already calibrated.
@@ -206,7 +175,7 @@ impl<I2C: I2c> Ina228<I2C> {
             .transpose()
             .map_err(Error::InvalidConfiguration)?;
         let config_value = self.config.with_adc_range(range);
-        let adc_config = self.read_u16(Register::AdcConfig)?;
+        let adc_config = self.read_adc_config()?;
         self.with_conversions_suspended(adc_config, |driver| {
             driver.write_u16(Register::Sovl, i16::MAX as u16)?;
             driver.write_u16(Register::Suvl, i16::MIN as u16)?;
@@ -239,7 +208,7 @@ impl<I2C: I2c> Ina228<I2C> {
         let shunt_cal = calibration
             .shunt_cal(adc_range)
             .map_err(Error::InvalidConfiguration)?;
-        let adc_config = self.read_u16(Register::AdcConfig)?;
+        let adc_config = self.read_adc_config()?;
         self.with_conversions_suspended(adc_config, |driver| {
             driver.write_u16(Register::ShuntCal, shunt_cal)?;
             driver.reset_accumulators()?;
@@ -260,7 +229,7 @@ impl<I2C: I2c> Ina228<I2C> {
             ));
         }
         let config_value = self.config.with_temperature_compensation(true);
-        let adc_config = self.read_u16(Register::AdcConfig)?;
+        let adc_config = self.read_adc_config()?;
         self.with_conversions_suspended(adc_config, |driver| {
             driver.write_u16(Register::ShuntTempco, tempco_ppm)?;
             driver.write_config(config_value)
@@ -270,7 +239,7 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Disables shunt temperature compensation.
     pub fn disable_temp_compensation(&mut self) -> Result<(), Error<I2C::Error>> {
         let config_value = self.config.with_temperature_compensation(false);
-        let adc_config = self.read_u16(Register::AdcConfig)?;
+        let adc_config = self.read_adc_config()?;
         self.with_conversions_suspended(adc_config, |driver| driver.write_config(config_value))
     }
 
@@ -319,9 +288,8 @@ impl<I2C: I2c> Ina228<I2C> {
         let calibration = self
             .calibration
             .expect("call calibrate() before reading accumulators");
-        let adc_config = self.read_u16(Register::AdcConfig)?;
-        let mode = adc_config & adc_config::MODE_MASK;
-        if mode < adc_config::FIRST_CONTINUOUS_MODE {
+        let adc_config = self.read_adc_config()?;
+        if !adc_config.accumulates() {
             return Err(Error::InvalidConfiguration(
                 ConfigurationError::AccumulatorMode,
             ));
@@ -490,6 +458,12 @@ impl<I2C: I2c> Ina228<I2C> {
         self.config.adc_range()
     }
 
+    fn read_adc_config(&mut self) -> Result<AdcConfigWord, I2C::Error> {
+        Ok(AdcConfigWord::from_device(
+            self.read_u16(Register::AdcConfig)?,
+        ))
+    }
+
     /// Writes CONFIG and records it as the new cached value.
     ///
     /// Taking a [`Config`] is what keeps the cache honest: the self-clearing commands
@@ -510,16 +484,15 @@ impl<I2C: I2c> Ina228<I2C> {
     /// encodings are already stopped, so they run `body` with no writes at all.
     fn with_conversions_suspended<T>(
         &mut self,
-        adc_config: u16,
+        adc_config: AdcConfigWord,
         body: impl FnOnce(&mut Self) -> Result<T, Error<I2C::Error>>,
     ) -> Result<T, Error<I2C::Error>> {
-        let mode = adc_config & adc_config::MODE_MASK;
-        if mode == 0 || mode == adc_config::ALTERNATE_SHUTDOWN_MODE {
+        if adc_config.is_shutdown() {
             return body(self);
         }
-        self.write_u16(Register::AdcConfig, adc_config & !adc_config::MODE_MASK)?;
+        self.write_u16(Register::AdcConfig, adc_config.shut_down().bits())?;
         let outcome = body(self);
-        let restored = self.write_u16(Register::AdcConfig, adc_config);
+        let restored = self.write_u16(Register::AdcConfig, adc_config.bits());
         outcome.and_then(|value| restored.map(|()| value))
     }
 
