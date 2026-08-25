@@ -991,19 +991,19 @@ fn physical_limit_setters_reject_invalid_values_before_i2c() {
     for voltage in [f32::NAN, -0.2, 0.2] {
         assert_configuration_error(
             ina.set_shunt_overvoltage_limit(voltage),
-            ConfigurationError::ShuntVoltageLimit,
+            ConfigurationError::Unrepresentable,
         );
     }
     for voltage in [f32::INFINITY, -0.001, 102.4] {
         assert_configuration_error(
             ina.set_bus_undervoltage_limit(voltage),
-            ConfigurationError::BusVoltageLimit,
+            ConfigurationError::Unrepresentable,
         );
     }
     for temperature in [f32::NEG_INFINITY, -256.01, 256.0] {
         assert_configuration_error(
             ina.set_temperature_limit(temperature),
-            ConfigurationError::TemperatureLimit,
+            ConfigurationError::Unrepresentable,
         );
     }
 
@@ -1019,7 +1019,10 @@ fn set_power_limit_rejects_invalid_values_before_i2c() {
     ina.calibrate(10.0, 0.01).unwrap();
 
     for power in [f32::NAN, -1.0, 1024.0] {
-        assert_configuration_error(ina.set_power_limit(power), ConfigurationError::PowerLimit);
+        assert_configuration_error(
+            ina.set_power_limit(power),
+            ConfigurationError::Unrepresentable,
+        );
     }
 
     ina.release().done();
@@ -1147,11 +1150,11 @@ fn set_temp_compensation_rejects_above_14_bits_before_i2c() {
     let mut ina = Ina228::new(i2c, ADDR).unwrap();
     assert_configuration_error(
         ina.set_temp_compensation(0x4000),
-        ConfigurationError::TemperatureCoefficient,
+        ConfigurationError::Unrepresentable,
     );
     assert_configuration_error(
         ina.set_temp_compensation(u16::MAX),
-        ConfigurationError::TemperatureCoefficient,
+        ConfigurationError::Unrepresentable,
     );
     ina.release().done();
 }

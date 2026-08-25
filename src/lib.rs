@@ -26,16 +26,11 @@ pub enum ConfigurationError {
     ShuntResistance,
     /// Calibration cannot be represented for the selected ADC range.
     Calibration,
-    /// Shunt temperature coefficient exceeds the 14-bit register.
-    TemperatureCoefficient,
-    /// Shunt-voltage threshold cannot be represented by its signed register.
-    ShuntVoltageLimit,
-    /// Bus-voltage threshold cannot be represented by its 15-bit register.
-    BusVoltageLimit,
-    /// Temperature threshold cannot be represented by its signed register.
-    TemperatureLimit,
-    /// Power threshold cannot be represented by its unsigned register.
-    PowerLimit,
+    /// A value cannot be represented by the register it targets.
+    ///
+    /// Every method that reports this takes one physical argument, so the call itself
+    /// says which value was rejected.
+    Unrepresentable,
     /// Energy and charge accumulators are invalid outside continuous conversion modes.
     AccumulatorMode,
 }
@@ -74,6 +69,10 @@ pub enum InitializationError<I2C: I2c> {
     },
 }
 
+/// Current scale derived from a calibration, with both fields finite and positive.
+///
+/// [`Calibration::new`] is the only way to build one, so the arithmetic below never has
+/// to re-check for a non-finite operand.
 #[derive(Debug, Clone, Copy)]
 struct Calibration {
     current_lsb: f64,
@@ -81,21 +80,35 @@ struct Calibration {
 }
 
 impl Calibration {
+    fn new(max_current_a: f32, shunt_resistance_ohm: f32) -> Result<Self, ConfigurationError> {
+        if !max_current_a.is_finite() || max_current_a <= 0.0 {
+            return Err(ConfigurationError::MaxCurrent);
+        }
+        if !shunt_resistance_ohm.is_finite() || shunt_resistance_ohm <= 0.0 {
+            return Err(ConfigurationError::ShuntResistance);
+        }
+        Ok(Self {
+            current_lsb: max_current_a as f64 / scale::SIGNED_20_BIT_FULL_SCALE,
+            shunt_resistance_ohm: shunt_resistance_ohm as f64,
+        })
+    }
+
     fn shunt_cal(self, adc_range: AdcRange) -> Result<u16, ConfigurationError> {
         let max_shunt_voltage =
             self.current_lsb * scale::SIGNED_20_BIT_FULL_SCALE * self.shunt_resistance_ohm;
-        if !max_shunt_voltage.is_finite() || max_shunt_voltage >= adc_range.full_scale_voltage() {
+        if max_shunt_voltage >= adc_range.full_scale_voltage() {
             return Err(ConfigurationError::Calibration);
         }
 
-        let shunt_cal =
-            adc_range.shunt_cal_scale() * self.current_lsb * self.shunt_resistance_ohm + 0.5;
-        // shunt_cal carries the rounding term, so the bound is one past the last code.
+        let exact = adc_range.shunt_cal_scale() * self.current_lsb * self.shunt_resistance_ohm;
+        // Both bounds sit half a count out because they constrain the rounded code, which
+        // SHUNT_CAL requires to land in 1..=UNSIGNED_15_BIT_MAX.
+        const MIN_CODE: f64 = 1.0;
         let max_code = scale::UNSIGNED_15_BIT_MAX as f64;
-        if !shunt_cal.is_finite() || !(1.0..max_code + 1.0).contains(&shunt_cal) {
+        if exact < MIN_CODE - 0.5 || exact >= max_code + 0.5 {
             return Err(ConfigurationError::Calibration);
         }
-        Ok(shunt_cal as u16)
+        Ok((exact + 0.5) as u16)
     }
 
     fn power_lsb(self) -> f64 {
@@ -107,34 +120,19 @@ impl Calibration {
     }
 }
 
-fn encode_signed(
-    value: f32,
-    lsb: f64,
-    error: ConfigurationError,
-) -> Result<u16, ConfigurationError> {
-    if !value.is_finite() {
-        return Err(error);
-    }
+fn encode_signed(value: f32, lsb: f64) -> Result<u16, ConfigurationError> {
     let raw = value as f64 / lsb;
     if !raw.is_finite() || raw <= i16::MIN as f64 - 0.5 || raw >= i16::MAX as f64 + 0.5 {
-        return Err(error);
+        return Err(ConfigurationError::Unrepresentable);
     }
     let rounded = if raw >= 0.0 { raw + 0.5 } else { raw - 0.5 };
     Ok(rounded as i16 as u16)
 }
 
-fn encode_unsigned(
-    value: f32,
-    lsb: f64,
-    max_raw: u16,
-    error: ConfigurationError,
-) -> Result<u16, ConfigurationError> {
-    if !value.is_finite() {
-        return Err(error);
-    }
+fn encode_unsigned(value: f32, lsb: f64, max_raw: u16) -> Result<u16, ConfigurationError> {
     let raw = value as f64 / lsb;
     if !raw.is_finite() || raw < 0.0 || raw >= max_raw as f64 + 0.5 {
-        return Err(error);
+        return Err(ConfigurationError::Unrepresentable);
     }
     Ok((raw + 0.5) as u16)
 }
@@ -334,19 +332,8 @@ impl<I2C: I2c> Ina228<I2C> {
         max_current_a: f32,
         shunt_resistance_ohm: f32,
     ) -> Result<(), Error<I2C::Error>> {
-        if !max_current_a.is_finite() || max_current_a <= 0.0 {
-            return Err(Error::InvalidConfiguration(ConfigurationError::MaxCurrent));
-        }
-        if !shunt_resistance_ohm.is_finite() || shunt_resistance_ohm <= 0.0 {
-            return Err(Error::InvalidConfiguration(
-                ConfigurationError::ShuntResistance,
-            ));
-        }
-
-        let calibration = Calibration {
-            current_lsb: max_current_a as f64 / scale::SIGNED_20_BIT_FULL_SCALE,
-            shunt_resistance_ohm: shunt_resistance_ohm as f64,
-        };
+        let calibration = Calibration::new(max_current_a, shunt_resistance_ohm)
+            .map_err(Error::InvalidConfiguration)?;
         let adc_range = self.adc_range();
         let shunt_cal = calibration
             .shunt_cal(adc_range)
@@ -366,9 +353,9 @@ impl<I2C: I2c> Ina228<I2C> {
     /// SHUNT_TEMPCO is written before TEMPCOMP is enabled, so a partial failure cannot
     /// activate a stale coefficient.
     pub fn set_temp_compensation(&mut self, tempco_ppm: u16) -> Result<(), Error<I2C::Error>> {
-        if tempco_ppm > 0x3FFF {
+        if tempco_ppm > scale::UNSIGNED_14_BIT_MAX {
             return Err(Error::InvalidConfiguration(
-                ConfigurationError::TemperatureCoefficient,
+                ConfigurationError::Unrepresentable,
             ));
         }
         let config_value = self.config.with_temperature_compensation(true);
@@ -496,13 +483,8 @@ impl<I2C: I2c> Ina228<I2C> {
 
     /// Set shunt over-voltage limit in Volts.
     pub fn set_shunt_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
-        let raw = encode_signed(
-            voltage_v,
-            self.adc_range().shunt_limit_lsb() as f64,
-            ConfigurationError::ShuntVoltageLimit,
-        )
-        .map_err(Error::InvalidConfiguration)?;
-        self.write_u16(Register::Sovl, raw)
+        let lsb = self.adc_range().shunt_limit_lsb() as f64;
+        self.write_signed_limit(Register::Sovl, voltage_v, lsb)
     }
 
     /// Set shunt under-voltage limit in Volts.
@@ -510,48 +492,37 @@ impl<I2C: I2c> Ina228<I2C> {
         &mut self,
         voltage_v: f32,
     ) -> Result<(), Error<I2C::Error>> {
-        let raw = encode_signed(
-            voltage_v,
-            self.adc_range().shunt_limit_lsb() as f64,
-            ConfigurationError::ShuntVoltageLimit,
-        )
-        .map_err(Error::InvalidConfiguration)?;
-        self.write_u16(Register::Suvl, raw)
+        let lsb = self.adc_range().shunt_limit_lsb() as f64;
+        self.write_signed_limit(Register::Suvl, voltage_v, lsb)
     }
 
     /// Set bus over-voltage limit in Volts.
     pub fn set_bus_overvoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
-        let raw = encode_unsigned(
+        self.write_unsigned_limit(
+            Register::Bovl,
             voltage_v,
             scale::BUS_LIMIT_LSB as f64,
             scale::UNSIGNED_15_BIT_MAX,
-            ConfigurationError::BusVoltageLimit,
         )
-        .map_err(Error::InvalidConfiguration)?;
-        self.write_u16(Register::Bovl, raw)
     }
 
     /// Set bus under-voltage limit in Volts.
     pub fn set_bus_undervoltage_limit(&mut self, voltage_v: f32) -> Result<(), Error<I2C::Error>> {
-        let raw = encode_unsigned(
+        self.write_unsigned_limit(
+            Register::Buvl,
             voltage_v,
             scale::BUS_LIMIT_LSB as f64,
             scale::UNSIGNED_15_BIT_MAX,
-            ConfigurationError::BusVoltageLimit,
         )
-        .map_err(Error::InvalidConfiguration)?;
-        self.write_u16(Register::Buvl, raw)
     }
 
     /// Set temperature over-limit in degrees Celsius.
     pub fn set_temperature_limit(&mut self, temp_c: f32) -> Result<(), Error<I2C::Error>> {
-        let raw = encode_signed(
+        self.write_signed_limit(
+            Register::TempLimit,
             temp_c,
             scale::DIE_TEMPERATURE_LSB as f64,
-            ConfigurationError::TemperatureLimit,
         )
-        .map_err(Error::InvalidConfiguration)?;
-        self.write_u16(Register::TempLimit, raw)
     }
 
     /// Set power over-limit in Watts.
@@ -559,14 +530,12 @@ impl<I2C: I2c> Ina228<I2C> {
         let calibration = self
             .calibration
             .expect("call calibrate() before setting power limit");
-        let raw = encode_unsigned(
+        self.write_unsigned_limit(
+            Register::PwrLimit,
             power_w,
             scale::POWER_LIMIT_TRUNCATION * calibration.power_lsb(),
             u16::MAX,
-            ConfigurationError::PowerLimit,
         )
-        .map_err(Error::InvalidConfiguration)?;
-        self.write_u16(Register::PwrLimit, raw)
     }
 
     /// Reads the manufacturer ID register (expected: `0x5449` for TI).
@@ -587,6 +556,27 @@ impl<I2C: I2c> Ina228<I2C> {
     /// Consumes the driver and returns the underlying I2C bus.
     pub fn release(self) -> I2C {
         self.i2c
+    }
+
+    fn write_signed_limit(
+        &mut self,
+        reg: Register,
+        value: f32,
+        lsb: f64,
+    ) -> Result<(), Error<I2C::Error>> {
+        let raw = encode_signed(value, lsb).map_err(Error::InvalidConfiguration)?;
+        self.write_u16(reg, raw)
+    }
+
+    fn write_unsigned_limit(
+        &mut self,
+        reg: Register,
+        value: f32,
+        lsb: f64,
+        max_raw: u16,
+    ) -> Result<(), Error<I2C::Error>> {
+        let raw = encode_unsigned(value, lsb, max_raw).map_err(Error::InvalidConfiguration)?;
+        self.write_u16(reg, raw)
     }
 
     /// Shunt ADC range currently programmed into CONFIG.

@@ -32,6 +32,9 @@ pub(crate) const BUS_LIMIT_LSB: f32 = BUS_VOLTAGE_LSB * VOLTAGE_LIMIT_TRUNCATION
 /// BOVL/BUVL and SHUNT_CAL each reserve bit 15 of an otherwise unsigned 16-bit register.
 pub(crate) const UNSIGNED_15_BIT_MAX: u16 = 0x7FFF;
 
+/// Largest code in a 14-bit register field: SHUNT_TEMPCO's coefficient occupies bits 13:0.
+pub(crate) const UNSIGNED_14_BIT_MAX: u16 = 0x3FFF;
+
 /// Positive full scale of a 20-bit signed register, in counts.
 ///
 /// VSHUNT and CURRENT are both 20-bit signed, which makes this both VSHUNT's positive
