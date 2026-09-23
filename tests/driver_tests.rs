@@ -12,6 +12,60 @@ const SHUTDOWN_ADC_CONFIG: u16 = 0x0B68;
 const SHUTDOWN_ALT_ADC_CONFIG: u16 = 0x8B68;
 const ADC_MODE_MASK: u16 = 0xF000;
 
+#[test]
+fn live_accumulators_read_full_width_without_writes() {
+    let cal = expected_shunt_cal(50.0, 0.0015, false);
+    let mut txns = active_calibration_txns(cal).to_vec();
+    txns.extend([
+        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
+        read_txn(0x0A, &u40_bytes((1_u64 << 40) - 524_288)),
+        read_txn(0x01, &DEFAULT_ADC_CONFIG.to_be_bytes()),
+        read_txn(0x09, &u40_bytes(1_u64 << 32)),
+    ]);
+    let mut device = Ina228::new(mock(&txns), ADDR).unwrap();
+    device.calibrate(50.0, 0.0015).unwrap();
+    assert_eq!(device.charge().unwrap(), -50.0);
+    assert_eq!(
+        device.energy().unwrap(),
+        (1_u64 << 32) as f64 * 50.0 / 524_288.0 * 3.2 * 16.0
+    );
+    device.release().done();
+}
+
+#[test]
+fn live_charge_rejects_triggered_mode_before_reading_counter() {
+    let cal = expected_shunt_cal(50.0, 0.0015, false);
+    let mut txns = active_calibration_txns(cal).to_vec();
+    txns.push(read_txn(0x01, &0x7B68_u16.to_be_bytes()));
+    let mut device = Ina228::new(mock(&txns), ADDR).unwrap();
+    device.calibrate(50.0, 0.0015).unwrap();
+    assert_eq!(
+        device.charge(),
+        Err(DriverError::InvalidConfiguration(
+            ConfigurationError::AccumulatorMode
+        ))
+    );
+    device.release().done();
+}
+
+#[test]
+fn calibration_readback_detects_power_on_reset_and_range_change() {
+    let cal = expected_shunt_cal(50.0, 0.0015, false);
+    let mut txns = active_calibration_txns(cal).to_vec();
+    for (config, shunt_cal) in [(0_u16, cal), (0, 0), (0x10, cal)] {
+        txns.extend([
+            read_txn(0x00, &config.to_be_bytes()),
+            read_txn(0x02, &shunt_cal.to_be_bytes()),
+        ]);
+    }
+    let mut device = Ina228::new(mock(&txns), ADDR).unwrap();
+    device.calibrate(50.0, 0.0015).unwrap();
+    assert!(device.calibration_matches_device().unwrap());
+    assert!(!device.calibration_matches_device().unwrap());
+    assert!(!device.calibration_matches_device().unwrap());
+    device.release().done();
+}
+
 /// Compute SHUNT_CAL from the datasheet formula, independently of the driver's derivation.
 fn expected_shunt_cal(max_current: f32, shunt_ohm: f32, adc_range_40mv: bool) -> u16 {
     let current_lsb = max_current / 524_288.0_f32;

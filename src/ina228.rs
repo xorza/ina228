@@ -241,6 +241,56 @@ impl<I2C: I2c> Ina228<I2C> {
         Ok((raw as f64 * calibration.power_lsb()) as f32)
     }
 
+    /// Reads accumulated charge in Coulombs without interrupting conversions.
+    ///
+    /// Requires calibration and continuous conversion mode. Negative charge denotes
+    /// reverse current. Reading clears CHARGEOF; read diagnostic flags first if needed.
+    /// Unlike a suspended snapshot, separate live reads are not a coherent set:
+    /// a conversion or overflow may occur between them. The caller must account for
+    /// rollover and device resets when calculating deltas.
+    pub fn charge(&mut self) -> Result<f64, Error<I2C::Error>> {
+        let calibration = self.calibration();
+        self.require_continuous_mode()?;
+        Ok(self.read_i40(Register::Charge)? as f64 * calibration.current_lsb())
+    }
+
+    /// Reads accumulated absolute energy in Joules without interrupting conversions.
+    ///
+    /// Requires calibration and continuous conversion mode. Reading clears ENERGYOF;
+    /// the same live-read consistency limits as [`charge`](Self::charge) apply.
+    pub fn energy(&mut self) -> Result<f64, Error<I2C::Error>> {
+        let calibration = self.calibration();
+        self.require_continuous_mode()?;
+        Ok(self.read_u40(Register::Energy)? as f64 * calibration.energy_lsb())
+    }
+
+    /// Checks live CONFIG and SHUNT_CAL against the driver's calibrated state.
+    ///
+    /// A power-on reset clears SHUNT_CAL. Callers sampling over long periods can use
+    /// this readback to reject data after a reset instead of applying cached scaling.
+    /// Returns false when uncalibrated. This does not restore configuration or prove
+    /// continuity if another bus master rewrites registers between checks.
+    pub fn calibration_matches_device(&mut self) -> Result<bool, Error<I2C::Error>> {
+        let Some(calibration) = self.calibration else {
+            return Ok(false);
+        };
+        let config = Config::from_device(self.read_u16(Register::Config)?);
+        let shunt_cal = self.read_u16(Register::ShuntCal)?;
+        let expected = calibration
+            .shunt_cal(self.adc_range())
+            .map_err(Error::InvalidConfiguration)?;
+        Ok(config == self.config && shunt_cal == expected)
+    }
+
+    fn require_continuous_mode(&mut self) -> Result<(), Error<I2C::Error>> {
+        if !self.read_adc_config()?.accumulates() {
+            return Err(Error::InvalidConfiguration(
+                ConfigurationError::AccumulatorMode,
+            ));
+        }
+        Ok(())
+    }
+
     /// Takes a coherent energy, charge, and diagnostic snapshot.
     ///
     /// Valid only in continuous conversion modes. Conversions are suspended so DIAG_ALRT,
